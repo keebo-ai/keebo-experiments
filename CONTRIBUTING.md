@@ -40,9 +40,12 @@ above when it doesn't.
 - **Shared code** lives in `common/` (e.g. `common/snowflake.py`, the connection
   client). Reach for it before writing your own; extend it if the next
   experiment needs the same thing.
-- **Credentials** come from environment variables only — never flags. Read them
-  from a `.env` file via `python-dotenv` (loaded once in `cli.py`). Add any new
-  vars to `.env.example`. Never commit real secrets.
+- **Credentials** are never passed as flags. Resolve them, in order, from a
+  `--connection NAME` entry in Snowflake's `connections.toml`, then `SNOWFLAKE_*`
+  environment variables / `.env` (via `python-dotenv`, loaded once in `cli.py`),
+  then an interactive prompt for anything missing (`click.prompt`, hidden input
+  for the password). See `common/snowflake.py` and the warehouse experiment's
+  `cli.py`. Add any new env vars to `.env.example`. Never commit real secrets.
 - **Types & style:** `from __future__ import annotations`, full type hints,
   frozen dataclasses for models. Ruff (`E,F,I,UP,B`, line length 120) and
   Python 3.14.

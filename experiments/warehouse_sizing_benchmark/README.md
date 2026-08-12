@@ -35,15 +35,28 @@ Everything runs on a dedicated `SIZING_BENCHMARK_WH` and touches nothing else.
 
 ## Credentials
 
-Credentials are read from the environment (never passed as flags). Copy the
-repo-root [`.env.example`](../../.env.example) to `.env` and fill it in — the CLI
-loads it automatically:
+Pick whichever fits — no secrets are passed as flags:
+
+**A named connection** from Snowflake's own `connections.toml` (the file the
+Snowflake CLI uses). If you already have one, just point at it:
+
+```bash
+poetry run warehouse-sizing-benchmark run --connection mydemo
+```
+
+**Environment / `.env`.** Copy the repo-root
+[`.env.example`](../../.env.example) to `.env` and fill it in — the CLI loads it
+automatically:
 
 ```bash
 cp .env.example .env
 # edit .env: SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PASSWORD (or
 # SNOWFLAKE_AUTHENTICATOR=externalbrowser for SSO), and SNOWFLAKE_ROLE.
 ```
+
+**Prompts.** Anything not supplied by `--connection` or the environment is
+prompted for (the password with hidden input), so you can also just run a
+command and type the values when asked.
 
 ## Usage
 
@@ -72,6 +85,7 @@ See all options with `--help` (or `-h`) on any command.
 - `run --runs 5` — runs per size (run 1 is cold, later runs warm; default 3).
 - `report --hours 12` — widen the `ACCOUNT_USAGE` lookback window (default 6).
 - `--warehouse MY_WH` — use a different benchmark warehouse name.
+- `--connection NAME` — connect via a `connections.toml` entry instead of env.
 
 ## How it maps to the article
 

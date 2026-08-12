@@ -37,21 +37,50 @@ _WAREHOUSE_OPTION = click.option(
     show_default=True,
     help="The dedicated benchmark warehouse.",
 )
+_CONNECTION_OPTION = click.option(
+    "--connection",
+    "connection_name",
+    default=None,
+    help=(
+        "Name of an entry in Snowflake's connections.toml to connect with. "
+        "If omitted, credentials come from SNOWFLAKE_* env / .env, prompting "
+        "for anything missing."
+    ),
+)
+
+
+def _resolve_credentials() -> sf.SnowflakeCredentials:
+    """Build credentials from the environment, prompting for what's missing."""
+    env = sf.env_credentials()
+    account = env["account"] or click.prompt("Snowflake account")
+    user = env["user"] or click.prompt("Snowflake user")
+    password = env["password"]
+    authenticator = env["authenticator"]
+    # Need one credential; prompt for a password only if SSO isn't configured.
+    if not password and not authenticator:
+        password = click.prompt("Snowflake password", hide_input=True)
+    return sf.SnowflakeCredentials(
+        account=account,
+        user=user,
+        password=password,
+        role=env["role"],
+        authenticator=authenticator,
+    )
 
 
 @contextmanager
-def _connect() -> Iterator[Any]:
-    """Open a connection from env credentials, as a context manager.
+def _open(connection_name: str | None) -> Iterator[Any]:
+    """Open a connection, as a context manager.
 
-    Missing/invalid credentials surface as a clean ``click.ClickException``
-    rather than a traceback.
+    Uses the named ``connections.toml`` entry if given; otherwise resolves
+    credentials from the environment, prompting for anything missing.
     """
-    try:
-        creds = sf.credentials_from_env()
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
-    with sf.connection(creds) as conn:
-        yield conn
+    if connection_name:
+        with sf.connection(connection_name=connection_name) as conn:
+            yield conn
+    else:
+        with sf.connection(creds=_resolve_credentials()) as conn:
+            yield conn
 
 
 def _echo_table(table: report_core.ReportTable) -> None:
@@ -79,9 +108,11 @@ def cli() -> None:
         warehouse-sizing-benchmark report    # read timings + credits back (wait a few min)
         warehouse-sizing-benchmark cleanup   # drop the benchmark warehouse
 
-    Credentials come from the environment (or a .env file): SNOWFLAKE_ACCOUNT,
-    SNOWFLAKE_USER, and SNOWFLAKE_PASSWORD (or SNOWFLAKE_AUTHENTICATOR); plus
-    SNOWFLAKE_ROLE for the ACCOUNT_USAGE report. See .env.example.
+    Credentials: pass --connection NAME to use an entry from Snowflake's
+    connections.toml, or set SNOWFLAKE_ACCOUNT / SNOWFLAKE_USER /
+    SNOWFLAKE_PASSWORD (or SNOWFLAKE_AUTHENTICATOR) / SNOWFLAKE_ROLE in the
+    environment or a .env file (see .env.example). Anything missing is prompted
+    for. SNOWFLAKE_ROLE needs ACCOUNT_USAGE access for the report.
 
     WARNING: this uses real compute. The full X-Small to 2X-Large sweep bills
     about 1.3 credits against TPCH_SF100.
@@ -110,12 +141,19 @@ def cli() -> None:
     type=click.IntRange(min=1),
     help="Runs per size. Run 1 is cold; later runs are warm.",
 )
-def run(table: str, warehouse_name: str, sizes: tuple[str, ...], runs: int) -> None:
+@_CONNECTION_OPTION
+def run(
+    table: str,
+    warehouse_name: str,
+    sizes: tuple[str, ...],
+    runs: int,
+    connection_name: str | None,
+) -> None:
     """Create the warehouse and run the fixed query across each size (Steps 1-9)."""
     selected = {size.upper() for size in sizes} if sizes else set(queries.SIZE_KEYWORDS)
     chosen_sizes = [row for row in queries.SIZES if row[0] in selected]
     try:
-        with _connect() as conn:
+        with _open(connection_name) as conn:
             sweep.sweep_sizes(
                 conn,
                 table=table,
@@ -137,14 +175,15 @@ def run(table: str, warehouse_name: str, sizes: tuple[str, ...], runs: int) -> N
     type=click.IntRange(min=1),
     help="Lookback window for the ACCOUNT_USAGE queries.",
 )
-def report(warehouse_name: str, hours: int) -> None:
+@_CONNECTION_OPTION
+def report(warehouse_name: str, hours: int, connection_name: str | None) -> None:
     """Read timings and credits back from ACCOUNT_USAGE (Steps 10-16).
 
     ACCOUNT_USAGE lags a few minutes (up to ~45); QUERY_ATTRIBUTION_HISTORY can
     trail several hours. Empty results mean it hasn't caught up — wait and rerun.
     """
     try:
-        with _connect() as conn:
+        with _open(connection_name) as conn:
             tables = report_core.read_report(conn, warehouse_name=warehouse_name, hours=hours)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -154,11 +193,12 @@ def report(warehouse_name: str, hours: int) -> None:
 
 @cli.command()
 @_WAREHOUSE_OPTION
+@_CONNECTION_OPTION
 @click.confirmation_option(prompt="Drop the benchmark warehouse?")
-def cleanup(warehouse_name: str) -> None:
+def cleanup(warehouse_name: str, connection_name: str | None) -> None:
     """Drop the benchmark warehouse and nothing else (Step 17)."""
     try:
-        with _connect() as conn:
+        with _open(connection_name) as conn:
             sweep.drop_warehouse(conn, warehouse_name=warehouse_name, echo=click.echo)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
