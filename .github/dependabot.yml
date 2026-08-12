@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Python dependencies managed by Poetry (pyproject.toml + poetry.lock).
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Keep the GitHub Actions used in our workflows up to date.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
