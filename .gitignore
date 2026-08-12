@@ -85,3 +85,6 @@ credentials.json
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Local planning/design docs — never published to this public repo
+docs/superpowers/

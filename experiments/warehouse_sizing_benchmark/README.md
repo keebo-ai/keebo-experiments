@@ -1,0 +1,131 @@
+# Warehouse-sizing benchmark
+
+Run one fixed query across every Snowflake warehouse size and read the timings
+and credits back from Snowflake's own history — so you get your own sizing curve
+on your own edition, region, and warehouse generation.
+
+This is the script behind the Keebo article *"Run the warehouse-sizing
+benchmark yourself"*. It creates a dedicated `SIZING_BENCHMARK_WH`, sweeps a
+fixed 600M-row aggregation over `SNOWFLAKE_SAMPLE_DATA.TPCH_SF100.LINEITEM` from
+X-Small to 2X-Large, then reports the curve, disk spill, and billed credits
+straight from `SNOWFLAKE.ACCOUNT_USAGE`.
+
+## What it demonstrates
+
+A bigger warehouse is not always more expensive per query. As the warehouse
+grows, runtime keeps falling while credits-per-query bottoms out and then
+climbs — the bottom is the sweet spot. The reason is disk **spill**: small
+warehouses run out of memory and push data to disk (slow); larger ones stop.
+Partitions scanned stays constant, so the difference is compute and memory, not
+how much data was read.
+
+## ⚠️ Before you run it
+
+This uses **real compute** on **your** account. The full X-Small to 2X-Large
+sweep bills about **1.3 credits** against TPCH_SF100. The report reads from
+`SNOWFLAKE.ACCOUNT_USAGE`, which needs `ACCOUNTADMIN` or granted access and lags
+a few minutes (up to ~45); `QUERY_ATTRIBUTION_HISTORY` can trail several hours.
+Everything runs on a dedicated `SIZING_BENCHMARK_WH` and touches nothing else.
+
+## Requirements
+
+- The `SNOWFLAKE_SAMPLE_DATA` share mounted (free, read-only; `run` checks for
+  it and prints the mount command if it's missing).
+- A role with access to `SNOWFLAKE.ACCOUNT_USAGE` for the report.
+
+## Credentials
+
+Pick whichever fits — no secrets are passed as flags:
+
+**A named connection** from Snowflake's own `connections.toml` (the file the
+Snowflake CLI uses). If you already have one, just point at it:
+
+```bash
+poetry run warehouse-sizing-benchmark run --connection mydemo
+```
+
+**Environment / `.env`.** Copy the repo-root
+[`.env.example`](../../.env.example) to `.env` and fill it in — the CLI loads it
+automatically:
+
+```bash
+cp .env.example .env
+# edit .env: SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PASSWORD (or
+# SNOWFLAKE_AUTHENTICATOR=externalbrowser for SSO), and SNOWFLAKE_ROLE.
+```
+
+**Prompts.** Anything not supplied by `--connection` or the environment is
+prompted for (the password with hidden input), so you can also just run a
+command and type the values when asked.
+
+> **MFA / SSO token caching.** If your account uses MFA or external-browser
+> SSO, each command opens its own connection and would otherwise re-prompt. The
+> project depends on `snowflake-connector-python[secure-local-storage]`, which
+> caches the token after the first approval so `run` → `report` → `cleanup`
+> don't each pop a prompt.
+>
+> The token is stored in your OS credential store, and `poetry install` pulls in
+> the right backend for your platform automatically — no configuration or
+> OS-specific setup:
+>
+> - **Windows** — Windows Credential Manager. Silent; no extra prompt.
+> - **Linux (desktop)** — Secret Service (GNOME Keyring / KWallet); may ask once
+>   to unlock the keyring.
+> - **macOS** — the login Keychain. The first run shows a system dialog asking
+>   to authorize the Python binary's access to the cached token — click
+>   **Always Allow** so later commands don't re-prompt. (A later Python upgrade
+>   can make it ask once more, since the grant is tied to the binary.)
+>
+> On a headless machine with no credential store, caching is simply skipped and
+> you'll be prompted per command — use `--connection`, env vars, key-pair, or
+> SSO for unattended runs.
+
+## Usage
+
+After `poetry install`, the experiment is available as a console script:
+
+```bash
+# 1. Create the warehouse and sweep every size (Steps 1-9).
+poetry run warehouse-sizing-benchmark run
+
+# 2. Wait a few minutes for ACCOUNT_USAGE to catch up, then read results
+#    (Steps 10-16): the sizing curve, disk spill, and billed credits.
+poetry run warehouse-sizing-benchmark report
+
+# 3. Drop the benchmark warehouse when you're done (Step 17).
+poetry run warehouse-sizing-benchmark cleanup
+```
+
+See all options with `--help` (or `-h`) on any command.
+
+### Useful options
+
+- `run --table SNOWFLAKE_SAMPLE_DATA.TPCH_SF1000.LINEITEM` — 6B rows for a
+  sharper curve at ~10x the cost. `TPCH_SF10` (60M rows) is too small to show
+  the effect.
+- `run --size medium --size large` — sweep only a subset of sizes (repeatable).
+- `run --runs 5` — runs per size (run 1 is cold, later runs warm; default 3).
+- `report --hours 12` — widen the `ACCOUNT_USAGE` lookback window (default 6).
+- `--warehouse MY_WH` — use a different benchmark warehouse name.
+- `--connection NAME` — connect via a `connections.toml` entry instead of env.
+
+## How it maps to the article
+
+| Article steps | Command   |
+| ------------- | --------- |
+| 1–9           | `run`     |
+| 10–16         | `report`  |
+| 17            | `cleanup` |
+
+## Layout
+
+- `cli.py` — thin `click` command layer (credentials, connection, output).
+- `core/` — the domain logic, with no `click` dependency; each function takes an
+  open connection so it stays testable:
+  - `core/queries.py` — the SQL and constants (the workload + the reporting queries).
+  - `core/sweep.py` — create, sweep, and drop the benchmark warehouse (Steps 1-9, 17).
+  - `core/report.py` — read timings and credits back from `ACCOUNT_USAGE` (Steps 10-16).
+
+## Related
+
+- Keebo blog: <https://keebo.ai/blog>
