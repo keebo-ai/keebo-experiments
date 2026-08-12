@@ -12,6 +12,11 @@ on:
   push:
     branches: [main]
 
+# Least privilege: this job only reads the repo to lint and test. No write
+# scopes on GITHUB_TOKEN.
+permissions:
+  contents: read
+
 # Cancel superseded runs on the same branch/PR to save CI minutes.
 concurrency:
   group: pr-checks-${{ github.ref }}
