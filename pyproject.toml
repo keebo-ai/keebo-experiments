@@ -8,7 +8,9 @@ license = "MIT"
 requires-python = ">=3.14,<4.0"
 dependencies = [
     "click>=8.1",
-    "snowflake-connector-python>=3.12",
+    # secure-local-storage pulls in keyring so the connector can cache SSO/MFA
+    # tokens — one approval per session instead of a prompt on every connect.
+    "snowflake-connector-python[secure-local-storage]>=3.12",
     "python-dotenv>=1.0",
 ]
 

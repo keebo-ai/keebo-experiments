@@ -58,6 +58,12 @@ cp .env.example .env
 prompted for (the password with hidden input), so you can also just run a
 command and type the values when asked.
 
+> **MFA / SSO:** if your account uses MFA or external-browser SSO, each command
+> opens its own connection and would normally re-prompt. The project depends on
+> `snowflake-connector-python[secure-local-storage]`, which caches the token
+> after the first approval so `run` → `report` → `cleanup` don't each pop an MFA
+> push.
+
 ## Usage
 
 After `poetry install`, the experiment is available as a console script:
