@@ -1,6 +1,6 @@
 [project]
 name = "keebo-experiments"
-version = "0.3.0"
+version = "0.2.0"
 description = "Runnable experiments demonstrating concepts from the Keebo blog (https://keebo.ai/blog)."
 authors = [{ name = "Keebo", email = "hello@keebo.ai" }]
 readme = "README.md"
@@ -19,9 +19,10 @@ Homepage = "https://keebo.ai"
 Blog = "https://keebo.ai/blog"
 Repository = "https://github.com/keebo-ai/keebo-experiments"
 
-# Each experiment exposes a console script so it runs as `poetry run <name>`.
+# One console script mounts every experiment as a subcommand (see common/cli.py):
+#   poetry run keebo-experiments <experiment> [options]
 [project.scripts]
-warehouse-sizing-benchmark = "experiments.warehouse_sizing_benchmark.cli:cli"
+keebo-experiments = "common.cli:cli"
 
 [tool.poetry]
 # Installable so the console scripts above are created. `common/` holds shared

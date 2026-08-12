@@ -40,17 +40,21 @@ above when it doesn't.
 - **Shared code** lives in `common/` (e.g. `common/snowflake.py`, the connection
   client). Reach for it before writing your own; extend it if the next
   experiment needs the same thing.
-- **Credentials** are never passed as flags. Resolve them, in order, from a
-  `--connection NAME` entry in Snowflake's `connections.toml`, then `SNOWFLAKE_*`
-  environment variables / `.env` (via `python-dotenv`, loaded once in `cli.py`),
-  then an interactive prompt for anything missing (`click.prompt`, hidden input
-  for the password). See `common/snowflake.py` and the warehouse experiment's
-  `cli.py`. Add any new env vars to `.env.example`. Never commit real secrets.
+- **Credentials** are never passed as flags. Use the shared helpers in
+  `common/credentials.py` — `connection_option` (the `--connection` flag),
+  `open_connection(connection_name)`, and `resolve_credentials()` — which
+  resolve, in order, from a `--connection NAME` entry in Snowflake's
+  `connections.toml`, then `SNOWFLAKE_*` env vars / `.env` (via `python-dotenv`),
+  then an interactive prompt for anything missing. See the warehouse
+  experiment's `cli.py`. Add any new env vars to `.env.example`. Never commit
+  real secrets.
 - **Types & style:** `from __future__ import annotations`, full type hints,
   frozen dataclasses for models. Ruff (`E,F,I,UP,B`, line length 120) and
   Python 3.14.
-- **Console script:** register one per experiment so it runs via `poetry run`
-  (see below).
+- **Shared CLI:** mount your experiment's command on the single
+  `keebo-experiments` CLI in `common/cli.py` (via `cli.add_command`), so it runs
+  as `poetry run keebo-experiments <experiment> ...`. There is one console
+  script for the whole repo — don't add per-experiment scripts.
 - **Tests** mirror the source tree under `tests/unit/`, using click's
   `CliRunner` + `mockito`. Shared connection fakes live in `tests/conftest.py`.
 
@@ -58,11 +62,12 @@ above when it doesn't.
 
 1. Create `experiments/<short_name>/` with `cli.py`, your domain module, and
    `README.md` (no `__init__.py` needed — it's a namespace package).
-2. Register the console script in the root `pyproject.toml`:
+2. Mount your command on the shared CLI in `common/cli.py`:
 
-   ```toml
-   [project.scripts]
-   <experiment-name> = "experiments.<short_name>.cli:cli"
+   ```python
+   from experiments.<short_name>.cli import <command>
+
+   cli.add_command(<command>, "<experiment-name>")
    ```
 
 3. Add any new dependencies to `[project.dependencies]` in the root
@@ -101,34 +106,26 @@ def do_the_thing(conn: Any, *, some_option: str = "default") -> list[tuple[Any, 
 from __future__ import annotations
 
 import click
-from dotenv import load_dotenv
 
-from common import snowflake as sf
+from common.credentials import connection_option, open_connection
 from experiments.<short_name> import <name>
 
-load_dotenv()
 
-
-@click.group(context_settings={"help_option_names": ["-h", "--help"]})
-def cli() -> None:
-    """<what this experiment does, and the cost warning if it uses real compute>."""
-
-
-@cli.command()
-def run() -> None:
-    """<what `run` does>."""
+@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@connection_option
+def <command>(connection_name: str | None) -> None:
+    """<what this command does, and the cost warning if it uses real compute>."""
     try:
-        creds = sf.credentials_from_env()
+        with open_connection(connection_name) as conn:
+            for row in <name>.do_the_thing(conn):
+                click.echo(row)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
-    with sf.connection(creds) as conn:
-        for row in <name>.do_the_thing(conn):
-            click.echo(row)
-
-
-if __name__ == "__main__":
-    cli()
 ```
+
+Then mount it on the shared CLI in `common/cli.py` (see step 2). Use a
+`@click.group()` instead of `@click.command()` if the experiment needs several
+subcommands (like `warehouse-sizing`'s `run` / `report` / `cleanup`).
 
 `tests/unit/experiments/<short_name>/test_<name>.py`:
 
