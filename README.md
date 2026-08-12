@@ -39,6 +39,11 @@ Every experiment is a subcommand of the single `keebo-experiments` CLI.
   credits back from `ACCOUNT_USAGE`, so you can plot your own sizing curve and
   find the cost sweet spot.
   Run: `poetry run keebo-experiments warehouse-sizing --help`.
+- [**multicluster-scaling**](./experiments/multicluster_scaling/) — read-only
+  ($0): reads your `ACCOUNT_USAGE` history to show how Snowflake's multi-cluster
+  auto-scaling actually behaved — peak clusters, how often extra ones spun up,
+  how long they lived, and how busy they were.
+  Run: `poetry run keebo-experiments multicluster-scaling --help`.
 
 ## Repository layout
 
