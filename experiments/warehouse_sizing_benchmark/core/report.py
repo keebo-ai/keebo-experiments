@@ -6,20 +6,10 @@ No ``click`` here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
+from common.tables import ReportTable
 from experiments.warehouse_sizing_benchmark.core import queries
-
-
-@dataclass(frozen=True)
-class ReportTable:
-    """One reporting query's result: its step number, title, and rows."""
-
-    step: int
-    title: str
-    columns: list[str]
-    rows: list[tuple[Any, ...]]
 
 
 def read_report(
