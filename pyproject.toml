@@ -6,30 +6,52 @@ authors = [{ name = "Keebo", email = "hello@keebo.ai" }]
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.14,<4.0"
-dependencies = []
+dependencies = [
+    "click>=8.1",
+    "snowflake-connector-python>=3.12",
+    "python-dotenv>=1.0",
+]
 
 [project.urls]
 Homepage = "https://keebo.ai"
 Blog = "https://keebo.ai/blog"
 Repository = "https://github.com/keebo-ai/keebo-experiments"
 
+# Each experiment exposes a console script so it runs as `poetry run <name>`.
+[project.scripts]
+warehouse-sizing-benchmark = "experiments.warehouse_sizing_benchmark.cli:cli"
+
 [tool.poetry]
-package-mode = false
+# Installable so the console scripts above are created. `common/` holds shared
+# helpers; `experiments/` holds one importable package per experiment.
+packages = [
+    { include = "common" },
+    { include = "experiments" },
+]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.1"
 ruff = "^0.16"
 commitizen = "^4.13"
+mockito = "^1.5"
 
 [tool.ruff]
 target-version = "py314"
-line-length = 100
+line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# Tests re-import fixtures and shadow names freely.
+"tests/**/*.py" = ["F811"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Import tests by path (mirrored tree has duplicate basenames) and put the repo
+# root on sys.path so `import common` / `import experiments` resolve.
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
 
 [tool.commitizen]
 # Conventional Commits + automatic version bumps, driven by CI (see

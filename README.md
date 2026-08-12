@@ -8,6 +8,14 @@ warehouse.
 Each experiment is self-contained and reproducible so you can see the idea work
 end-to-end, then adapt it to your own environment.
 
+## Experiments
+
+- [**warehouse-sizing-benchmark**](./experiments/warehouse_sizing_benchmark/) —
+  a `click` CLI that sweeps one fixed query across every Snowflake warehouse
+  size and reads the timings and credits back from `ACCOUNT_USAGE`, so you can
+  plot your own sizing curve and find the cost sweet spot.
+  Run: `poetry run warehouse-sizing-benchmark --help`.
+
 > **Disclaimer:** These experiments run against **your own** data warehouse and cloud accounts, and any compute, storage, or query costs they incur are **your responsibility**. Keebo makes no guarantee that any experiment will be cheap, cost-neutral, or cost-saving, and provides them "as is," without warranty of any kind. Review what an experiment does and estimate its cost before you run it.
 
 ## Requirements
@@ -18,30 +26,41 @@ end-to-end, then adapt it to your own environment.
 ## Getting started
 
 ```bash
-# Install dependencies into a virtual environment
+# Install dependencies and the experiment console scripts
 poetry install
 
-# Run a command inside the environment
-poetry run python -m pytest
+# List what's available, then run an experiment
+poetry run warehouse-sizing-benchmark --help
+
+# Credentials come from a .env file (git-ignored); start from the template
+cp .env.example .env
 ```
 
 ## Repository layout
 
 ```
 keebo-experiments/
-├── experiments/   # one directory per experiment (see experiments/README.md)
-├── tests/         # smoke tests that keep the scaffold healthy
-├── pyproject.toml # Poetry project + tooling config
+├── common/        # shared helpers (e.g. the Snowflake connection client)
+├── experiments/   # one importable package per experiment (see experiments/README.md)
+│   └── warehouse_sizing_benchmark/
+│       ├── cli.py        # click command layer
+│       └── benchmark.py  # domain logic (no click; takes a connection)
+├── tests/         # unit tests, mirroring the source tree under tests/unit/
+├── .env.example   # credential template
+├── pyproject.toml # Poetry project, console scripts, and tooling config
 └── README.md
 ```
 
 ## Adding an experiment
 
-1. Create a new directory under `experiments/`, e.g. `experiments/my-idea/`.
-2. Add a `README.md` explaining what it demonstrates and linking the related
+1. Create an importable package under `experiments/`, e.g.
+   `experiments/my_idea/` (underscores — it's a Python package).
+2. Split a thin `cli.py` (`click`) from a `click`-free domain module that takes
+   an open connection, and register a console script in `[project.scripts]`.
+3. Add a `README.md` explaining what it demonstrates and linking the related
    blog post.
-3. Keep dependencies in the root `pyproject.toml` so everything installs with a
-   single `poetry install`.
+4. Keep shared code in `common/` and dependencies in the root `pyproject.toml`
+   so everything installs with a single `poetry install`.
 
 ## Development
 
