@@ -1,30 +1,20 @@
-"""Warehouse-sizing benchmark — domain layer (no CLI dependencies).
+"""The SQL and constants behind the warehouse-sizing benchmark.
 
-Run one fixed query across every Snowflake warehouse size, then read the timings
-and credits back from Snowflake's own history. This is the logic behind the
-Keebo article "Run the warehouse-sizing benchmark yourself".
-
-Every function here takes an already-open connection as its first argument — the
-injection seam — so the same code runs against a connection opened by the CLI, a
-notebook, or a test fake. The module never imports ``click``; it raises plain
-``ValueError`` for misuse and the CLI layer turns that into a clean error
-message.
+Kept apart from the orchestration logic so the queries — the part you'd tweak to
+change the workload or the reporting — read as data, in one place. No database
+or CLI dependencies here.
 """
 
 from __future__ import annotations
 
 import re
-import time
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from typing import Any
 
 # --------------------------------------------------------------------------- #
 # The benchmark workload
 #
 # This SELECT is identical on every run at every size, so any difference in
 # timing is the warehouse, not the query. ``IDENTIFIER($lineitem_table)`` reads
-# the table from a session variable set in `sweep_sizes` (Step 2 of the article).
+# the table from a session variable set by the sweep (Step 2 of the article).
 # --------------------------------------------------------------------------- #
 BENCHMARK_QUERY = (
     "SELECT l_orderkey, l_suppkey, COUNT(*) AS line_count, "
@@ -51,14 +41,6 @@ DEFAULT_TABLE = "SNOWFLAKE_SAMPLE_DATA.TPCH_SF100.LINEITEM"
 DEFAULT_WAREHOUSE = "SIZING_BENCHMARK_WH"
 QUERY_TAG_PREFIX = "wsbench"
 
-# A no-op progress sink; the CLI passes ``click.echo`` instead.
-Echo = Callable[[str], None]
-
-
-def _silent(_message: str) -> None:
-    pass
-
-
 # Identifiers we interpolate into SQL are validated against this first —
 # belt-and-suspenders against injection, since they arrive from CLI flags.
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.$]+$")
@@ -69,130 +51,6 @@ def validate_identifier(value: str, label: str) -> str:
     if not _IDENTIFIER_RE.match(value):
         raise ValueError(f"{label} must match [A-Za-z0-9_.$]+, got {value!r}")
     return value
-
-
-@dataclass(frozen=True)
-class ReportTable:
-    """One reporting query's result: its step number, title, and rows."""
-
-    step: int
-    title: str
-    columns: list[str]
-    rows: list[tuple[Any, ...]]
-
-
-def sweep_sizes(
-    conn: Any,
-    *,
-    table: str = DEFAULT_TABLE,
-    warehouse_name: str = DEFAULT_WAREHOUSE,
-    sizes: Sequence[tuple[str, str, int]] = tuple(SIZES),
-    runs: int = 3,
-    echo: Echo = _silent,
-) -> None:
-    """Create the warehouse and run the fixed query across each size (Steps 1-9).
-
-    The measurable output of the sweep lives in Snowflake's query history, not in
-    a return value; :func:`read_report` reads it back. ``echo`` receives
-    human-readable progress as the sweep runs.
-    """
-    validate_identifier(table, "table")
-    validate_identifier(warehouse_name, "warehouse")
-
-    cur = conn.cursor()
-    try:
-        # Step 1: confirm the sample data is mounted.
-        cur.execute("SHOW TERSE OBJECTS LIKE 'LINEITEM' IN SCHEMA SNOWFLAKE_SAMPLE_DATA.TPCH_SF100")
-        if not cur.fetchall() and table == DEFAULT_TABLE:
-            raise ValueError(
-                "SNOWFLAKE_SAMPLE_DATA.TPCH_SF100.LINEITEM not found. An "
-                "ACCOUNTADMIN can mount it:\n"
-                "  CREATE DATABASE IF NOT EXISTS SNOWFLAKE_SAMPLE_DATA "
-                "FROM SHARE SFC_SAMPLES.SAMPLE_DATA;\n"
-                "  GRANT IMPORTED PRIVILEGES ON DATABASE SNOWFLAKE_SAMPLE_DATA "
-                "TO ROLE PUBLIC;"
-            )
-
-        # Step 2: point a session variable at the table.
-        cur.execute(f"SET lineitem_table = '{table}'")
-
-        # Step 3: create and select the dedicated benchmark warehouse.
-        echo(f"Creating warehouse {warehouse_name} ...")
-        cur.execute(
-            f"CREATE WAREHOUSE IF NOT EXISTS {warehouse_name} "
-            "WAREHOUSE_SIZE = XSMALL AUTO_SUSPEND = 60 AUTO_RESUME = TRUE "
-            "INITIALLY_SUSPENDED = TRUE "
-            "COMMENT = 'Keebo warehouse-sizing benchmark - safe to drop'"
-        )
-        cur.execute(f"USE WAREHOUSE {warehouse_name}")
-        # Turn off the result cache, else a repeated query returns for free and
-        # defeats the measurement.
-        cur.execute("ALTER SESSION SET USE_CACHED_RESULT = FALSE")
-
-        # Steps 4-9: the sweep.
-        for keyword, label, _credits in sizes:
-            echo(f"\n=== {label} ({keyword}) ===")
-            cur.execute(f"ALTER WAREHOUSE {warehouse_name} SET WAREHOUSE_SIZE = {keyword}")
-            cur.execute(f"ALTER WAREHOUSE {warehouse_name} RESUME IF SUSPENDED")
-            for attempt in range(1, runs + 1):
-                cur.execute(f"ALTER SESSION SET QUERY_TAG = '{QUERY_TAG_PREFIX}:{keyword}:{attempt}'")
-                started = time.perf_counter()
-                cur.execute(BENCHMARK_QUERY)
-                cur.fetchall()  # force full execution
-                elapsed = time.perf_counter() - started
-                warmth = "cold" if attempt == 1 else "warm"
-                echo(f"  run {attempt} ({warmth}): {elapsed:6.1f}s  [{cur.sfqid}]")
-            # SUSPEND clears the local cache so the next size also starts cold.
-            cur.execute(f"ALTER WAREHOUSE {warehouse_name} SUSPEND")
-
-        echo(
-            "\nSweep complete. ACCOUNT_USAGE lags a few minutes (up to ~45), so "
-            "wait, then run:  warehouse-sizing-benchmark report"
-        )
-    finally:
-        cur.close()
-
-
-def read_report(
-    conn: Any,
-    *,
-    warehouse_name: str = DEFAULT_WAREHOUSE,
-    hours: int = 6,
-) -> list[ReportTable]:
-    """Read timings and credits back from ACCOUNT_USAGE (Steps 10-16).
-
-    Returns one :class:`ReportTable` per step. Empty ``rows`` mean ACCOUNT_USAGE
-    hasn't caught up yet — wait and rerun.
-    """
-    validate_identifier(warehouse_name, "warehouse")
-    hours = int(hours)
-
-    cur = conn.cursor()
-    tables: list[ReportTable] = []
-    try:
-        for step, title, sql in REPORT_STEPS:
-            cur.execute(sql.format(hours=hours, wh=warehouse_name))
-            columns = [col[0] for col in cur.description]
-            tables.append(ReportTable(step, title, columns, list(cur.fetchall())))
-    finally:
-        cur.close()
-    return tables
-
-
-def drop_warehouse(
-    conn: Any,
-    *,
-    warehouse_name: str = DEFAULT_WAREHOUSE,
-    echo: Echo = _silent,
-) -> None:
-    """Drop the benchmark warehouse and nothing else (Step 17)."""
-    validate_identifier(warehouse_name, "warehouse")
-    cur = conn.cursor()
-    try:
-        cur.execute(f"DROP WAREHOUSE IF EXISTS {warehouse_name}")
-        echo(f"Dropped {warehouse_name}.")
-    finally:
-        cur.close()
 
 
 # --------------------------------------------------------------------------- #

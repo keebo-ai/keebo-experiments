@@ -6,9 +6,11 @@ Someone should be able to clone the repo, run one experiment end-to-end, and
 read its code top-to-bottom without touching anything else.
 
 This guide is the recipe. `experiments/warehouse_sizing_benchmark/` is the
-reference implementation — copy its shape.
+reference implementation.
 
 ## The shape of an experiment
+
+Start minimal — a CLI plus one domain module:
 
 ```
 experiments/<short_name>/        # underscores — it's an importable package (PEP 420, no __init__.py)
@@ -26,6 +28,12 @@ Two rules do most of the work:
 2. **Inject the connection.** Domain functions take an already-open
    connection/client as their first argument. That's what keeps them testable
    (a fake connection) and reusable (a notebook, another experiment).
+
+When the domain logic grows past one comfortable module, group it under a
+`core/` subpackage instead — `core/queries.py`, `core/sweep.py`,
+`core/report.py`, etc. The `warehouse_sizing_benchmark` experiment does this;
+follow it when an experiment has that much surface, and keep the flat shape
+above when it doesn't.
 
 ## Conventions (match these)
 

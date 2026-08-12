@@ -1,6 +1,6 @@
 """Warehouse-sizing benchmark — command-line front end.
 
-Thin ``click`` wrappers over the domain layer in :mod:`benchmark`. Each command
+Thin ``click`` wrappers over the domain layer in :mod:`core`. Each command
 resolves Snowflake credentials from the environment, opens a connection, and
 hands it to a domain function. Credentials are read from ``.env`` (or the real
 environment); no secrets are passed as flags.
@@ -23,7 +23,8 @@ import click
 from dotenv import load_dotenv
 
 from common import snowflake as sf
-from experiments.warehouse_sizing_benchmark import benchmark
+from experiments.warehouse_sizing_benchmark.core import queries, sweep
+from experiments.warehouse_sizing_benchmark.core import report as report_core
 
 # Load .env once, so credentials can live in a file that git ignores.
 load_dotenv()
@@ -32,7 +33,7 @@ load_dotenv()
 _WAREHOUSE_OPTION = click.option(
     "--warehouse",
     "warehouse_name",
-    default=benchmark.DEFAULT_WAREHOUSE,
+    default=queries.DEFAULT_WAREHOUSE,
     show_default=True,
     help="The dedicated benchmark warehouse.",
 )
@@ -53,7 +54,7 @@ def _connect() -> Iterator[Any]:
         yield conn
 
 
-def _echo_table(table: benchmark.ReportTable) -> None:
+def _echo_table(table: report_core.ReportTable) -> None:
     """Print one report step as an aligned table."""
     click.echo(f"\n--- Step {table.step}. {table.title} ---")
     if not table.rows:
@@ -90,7 +91,7 @@ def cli() -> None:
 @cli.command()
 @click.option(
     "--table",
-    default=benchmark.DEFAULT_TABLE,
+    default=queries.DEFAULT_TABLE,
     show_default=True,
     help="Fully-qualified table to query. TPCH_SF1000 gives a sharper curve at ~10x cost.",
 )
@@ -99,7 +100,7 @@ def cli() -> None:
     "--size",
     "sizes",
     multiple=True,
-    type=click.Choice(benchmark.SIZE_KEYWORDS, case_sensitive=False),
+    type=click.Choice(queries.SIZE_KEYWORDS, case_sensitive=False),
     help="Restrict the sweep to these sizes (repeatable). Defaults to all six.",
 )
 @click.option(
@@ -111,15 +112,15 @@ def cli() -> None:
 )
 def run(table: str, warehouse_name: str, sizes: tuple[str, ...], runs: int) -> None:
     """Create the warehouse and run the fixed query across each size (Steps 1-9)."""
-    selected = {size.upper() for size in sizes} if sizes else set(benchmark.SIZE_KEYWORDS)
-    sweep = [row for row in benchmark.SIZES if row[0] in selected]
+    selected = {size.upper() for size in sizes} if sizes else set(queries.SIZE_KEYWORDS)
+    chosen_sizes = [row for row in queries.SIZES if row[0] in selected]
     try:
         with _connect() as conn:
-            benchmark.sweep_sizes(
+            sweep.sweep_sizes(
                 conn,
                 table=table,
                 warehouse_name=warehouse_name,
-                sizes=sweep,
+                sizes=chosen_sizes,
                 runs=runs,
                 echo=click.echo,
             )
@@ -144,7 +145,7 @@ def report(warehouse_name: str, hours: int) -> None:
     """
     try:
         with _connect() as conn:
-            tables = benchmark.read_report(conn, warehouse_name=warehouse_name, hours=hours)
+            tables = report_core.read_report(conn, warehouse_name=warehouse_name, hours=hours)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     for table in tables:
@@ -158,7 +159,7 @@ def cleanup(warehouse_name: str) -> None:
     """Drop the benchmark warehouse and nothing else (Step 17)."""
     try:
         with _connect() as conn:
-            benchmark.drop_warehouse(conn, warehouse_name=warehouse_name, echo=click.echo)
+            sweep.drop_warehouse(conn, warehouse_name=warehouse_name, echo=click.echo)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
 

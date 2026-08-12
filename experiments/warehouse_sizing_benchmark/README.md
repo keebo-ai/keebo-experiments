@@ -84,8 +84,11 @@ See all options with `--help` (or `-h`) on any command.
 ## Layout
 
 - `cli.py` — thin `click` command layer (credentials, connection, output).
-- `benchmark.py` — the domain logic (the sweep, the reporting queries); takes an
-  open connection so it stays testable and CLI-free.
+- `core/` — the domain logic, with no `click` dependency; each function takes an
+  open connection so it stays testable:
+  - `core/queries.py` — the SQL and constants (the workload + the reporting queries).
+  - `core/sweep.py` — create, sweep, and drop the benchmark warehouse (Steps 1-9, 17).
+  - `core/report.py` — read timings and credits back from `ACCOUNT_USAGE` (Steps 10-16).
 
 ## Related
 
