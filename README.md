@@ -22,6 +22,11 @@ Every experiment is a subcommand of the single `keebo-experiments` CLI:
   auto-scaling actually behaved — peak clusters, how often extra ones spun up,
   how long they lived, and how busy they were.
   Run: `poetry run keebo-experiments multicluster-scaling --help`.
+- [**multicluster-demo**](./experiments/multicluster_demo/) — **spends credits**:
+  runs the same batch of concurrent queries with one cluster vs many to show
+  multi-cluster scale-out cutting queue time and wall-clock. `run --estimate`
+  prints the cost first; the temporary warehouse is dropped automatically.
+  Run: `poetry run keebo-experiments multicluster-demo --help`.
 
 > **Disclaimer:** These experiments run against **your own** data warehouse and cloud accounts, and any compute, storage, or query costs they incur are **your responsibility**. Keebo makes no guarantee that any experiment will be cheap, cost-neutral, or cost-saving, and provides them "as is," without warranty of any kind. Review what an experiment does and estimate its cost before you run it.
 
