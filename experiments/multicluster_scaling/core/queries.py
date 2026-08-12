@@ -4,33 +4,38 @@ Domain layer: each function takes an already-open connection (the injection
 seam) and returns normalized records. No ``click`` here — misuse raises plain
 ``ValueError`` for the CLI to turn into a clean message.
 
-The ``EVENT_NAME`` values were verified against Snowflake's
-``WAREHOUSE_EVENTS_HISTORY`` documentation (August 2026); they are centralized
-here so they are easy to adjust if an account emits different values.
+The event names and state below were verified against a live Snowflake account
+(August 2026): cluster lifecycle rows use ``RESUME_CLUSTER`` (a cluster starts)
+and ``SUSPEND_CLUSTER`` (a cluster stops), are emitted in the ``STARTED`` state,
+and carry a ``CLUSTER_NUMBER``. ``SPINDOWN_CLUSTER`` rows exist but have a NULL
+``CLUSTER_NUMBER``, so they are filtered out. The alternate names
+(``SPINUP_CLUSTER`` / ``SHUTDOWN_CLUSTER``) are kept for accounts that emit them.
 """
 
 from __future__ import annotations
 
 import enum
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-_CLUSTER_START_EVENTS = ("SPINUP_CLUSTER", "RESUME_CLUSTER")
-_CLUSTER_STOP_EVENTS = ("SPINDOWN_CLUSTER", "SHUTDOWN_CLUSTER")
-
-_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+_CLUSTER_START_EVENTS = ("RESUME_CLUSTER", "SPINUP_CLUSTER")
+_CLUSTER_STOP_EVENTS = ("SUSPEND_CLUSTER", "SPINDOWN_CLUSTER", "SHUTDOWN_CLUSTER")
 
 
-def validate_identifier(value: str, kind: str) -> str:
-    """Guard a value we interpolate into SQL as an identifier/name."""
-    if not _IDENTIFIER.match(value):
-        raise ValueError(
-            f"Unsafe {kind} name {value!r}: expected letters, digits, underscore, "
-            "or '$', with a non-digit first character."
-        )
-    return value
+def _quote_literal(value: str) -> str:
+    """Quote a value as a SQL string literal (compared against a column)."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _quote_identifier(value: str) -> str:
+    """Quote a value as a SQL identifier (case-sensitive; e.g. USE WAREHOUSE).
+
+    Warehouse names can legitimately contain hyphens or be lower-case (created as
+    quoted identifiers), so we always double-quote rather than restrict the
+    character set.
+    """
+    return '"' + value.replace('"', '""') + '"'
 
 
 class ClusterEventKind(enum.Enum):
@@ -59,19 +64,18 @@ class QueryRecord:
 
 
 def _warehouse_filter(warehouse_names: tuple[str, ...]) -> str:
-    """Build an optional ``AND WAREHOUSE_NAME IN (...)`` clause (validated)."""
+    """Build an optional ``AND WAREHOUSE_NAME IN (...)`` clause."""
     if not warehouse_names:
         return ""
-    quoted = ", ".join(f"'{validate_identifier(name, 'warehouse')}'" for name in warehouse_names)
+    quoted = ", ".join(_quote_literal(name) for name in warehouse_names)
     return f"  AND WAREHOUSE_NAME IN ({quoted})\n"
 
 
 def use_warehouse(conn: Any, warehouse: str) -> None:
     """Select the warehouse the read-only history queries run on."""
-    validate_identifier(warehouse, "warehouse")
     cur = conn.cursor()
     try:
-        cur.execute(f"USE WAREHOUSE {warehouse}")
+        cur.execute(f"USE WAREHOUSE {_quote_identifier(warehouse)}")
     finally:
         cur.close()
 
@@ -83,8 +87,9 @@ def cluster_events(conn: Any, *, days: int, warehouse_names: tuple[str, ...] = (
     sql = (
         "SELECT TIMESTAMP, WAREHOUSE_NAME, CLUSTER_NUMBER, EVENT_NAME\n"
         "FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_EVENTS_HISTORY\n"
-        "WHERE EVENT_STATE = 'COMPLETED'\n"
+        "WHERE EVENT_STATE = 'STARTED'\n"
         f"  AND EVENT_NAME IN ({event_list})\n"
+        "  AND CLUSTER_NUMBER IS NOT NULL\n"
         f"  AND TIMESTAMP >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())\n"
         f"{_warehouse_filter(warehouse_names)}"
         "ORDER BY WAREHOUSE_NAME, CLUSTER_NUMBER, TIMESTAMP"

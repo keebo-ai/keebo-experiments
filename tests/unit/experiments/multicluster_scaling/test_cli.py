@@ -48,13 +48,16 @@ def test_empty_history_reports_no_activity(runner, make_cursor, make_connection)
     assert "No multi-cluster warehouses" in result.output
 
 
-def test_unsafe_warehouse_name_is_a_clean_error(runner, make_cursor, make_connection):
+def test_dashed_warehouse_name_is_accepted(runner, make_cursor, make_connection):
     _stub_connection(make_connection(make_cursor(fetch=[])))
 
+    # Hyphenated/lower-case warehouse names are valid quoted identifiers. An
+    # explicitly-named warehouse always gets a row, even with no activity.
     result = runner.invoke(
         cli_module.multicluster_scaling,
-        ["--connection", "test", "--warehouse", "bad-name"],
+        ["--connection", "test", "--warehouse", "some-dashed-wh"],
     )
 
-    assert result.exit_code != 0
-    assert "Unsafe warehouse name" in result.output
+    assert result.exit_code == 0, result.output
+    assert "some-dashed-wh" in result.output
+    assert "Never scaled past its base cluster" in result.output

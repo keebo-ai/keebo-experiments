@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import pytest
-
 from experiments.multicluster_scaling.core import queries
 from experiments.multicluster_scaling.core.queries import ClusterEventKind
 
@@ -15,8 +13,8 @@ BASE = datetime(2026, 8, 1, tzinfo=UTC)
 def test_cluster_events_builds_sql_and_maps_rows(make_cursor, make_connection):
     cursor = make_cursor(
         fetch=[
-            (BASE, "WH", 2, "SPINUP_CLUSTER"),
-            (BASE, "WH", 2, "SPINDOWN_CLUSTER"),
+            (BASE, "WH", 2, "RESUME_CLUSTER"),
+            (BASE, "WH", 2, "SUSPEND_CLUSTER"),
         ]
     )
 
@@ -24,6 +22,8 @@ def test_cluster_events_builds_sql_and_maps_rows(make_cursor, make_connection):
 
     sql = cursor.executed[0]
     assert "SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_EVENTS_HISTORY" in sql
+    assert "EVENT_STATE = 'STARTED'" in sql
+    assert "CLUSTER_NUMBER IS NOT NULL" in sql
     assert "DATEADD('day', -14, CURRENT_TIMESTAMP())" in sql
     assert "WAREHOUSE_NAME IN" not in sql  # no filter when none requested
     assert [event.kind for event in events] == [ClusterEventKind.STARTED, ClusterEventKind.STOPPED]
@@ -47,19 +47,19 @@ def test_query_history_maps_rows(make_cursor, make_connection):
     assert records[0].warehouse == "WH" and records[0].cluster_number == 3
 
 
-def test_use_warehouse_issues_use_statement(make_cursor, make_connection):
+def test_use_warehouse_double_quotes_the_identifier(make_cursor, make_connection):
     cursor = make_cursor()
 
-    queries.use_warehouse(make_connection(cursor), "MY_WH")
+    # Warehouse names may be lower-case or hyphenated (quoted identifiers).
+    queries.use_warehouse(make_connection(cursor), "wh-with-dash")
 
-    assert "USE WAREHOUSE MY_WH" in cursor.executed
+    assert 'USE WAREHOUSE "wh-with-dash"' in cursor.executed
 
 
-def test_unsafe_warehouse_name_is_rejected(make_cursor, make_connection):
-    conn = make_connection(make_cursor())
+def test_warehouse_filter_quotes_names_as_literals(make_cursor, make_connection):
+    cursor = make_cursor(fetch=[])
 
-    with pytest.raises(ValueError, match="Unsafe warehouse name"):
-        queries.cluster_events(conn, days=7, warehouse_names=("bad-name",))
+    # Hyphens are valid names; single quotes are escaped — neither is rejected.
+    queries.cluster_events(make_connection(cursor), days=7, warehouse_names=("wh-with-dash", "o'brien"))
 
-    with pytest.raises(ValueError, match="Unsafe warehouse name"):
-        queries.use_warehouse(conn, "bad-name")
+    assert "WAREHOUSE_NAME IN ('wh-with-dash', 'o''brien')" in cursor.executed[0]

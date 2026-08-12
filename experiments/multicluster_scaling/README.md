@@ -17,7 +17,7 @@ into the mechanism — not a recommendation.
 
 For each warehouse it:
 
-1. Pairs `SPINUP_CLUSTER`/`SPINDOWN_CLUSTER` events from
+1. Pairs `RESUME_CLUSTER`/`SUSPEND_CLUSTER` events from
    `WAREHOUSE_EVENTS_HISTORY` into cluster **lifetimes**, and takes the highest
    cluster number seen as the **peak cluster count**.
 2. Counts how many times marginal clusters (cluster number ≥ 2) spun up.
