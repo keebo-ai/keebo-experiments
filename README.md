@@ -8,6 +8,8 @@ warehouse.
 Each experiment is self-contained and reproducible so you can see the idea work
 end-to-end, then adapt it to your own environment.
 
+> **Disclaimer:** These experiments run against **your own** data warehouse and cloud accounts, and any compute, storage, or query costs they incur are **your responsibility**. Keebo makes no guarantee that any experiment will be cheap, cost-neutral, or cost-saving, and provides them "as is," without warranty of any kind. Review what an experiment does and estimate its cost before you run it.
+
 ## Requirements
 
 - [Python](https://www.python.org/) 3.11+
