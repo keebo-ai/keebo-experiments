@@ -3,6 +3,9 @@
 Each subdirectory here is a standalone experiment tied to a concept from the
 [Keebo blog](https://keebo.ai/blog).
 
+See the repo-root [CONTRIBUTING.md](../CONTRIBUTING.md) for the full recipe and a
+copy-paste skeleton for a new experiment.
+
 ## Conventions
 
 - One importable package per experiment: `experiments/<short_name>/` (use

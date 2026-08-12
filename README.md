@@ -53,6 +53,9 @@ keebo-experiments/
 
 ## Adding an experiment
 
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full recipe and a copy-paste
+skeleton. In short:
+
 1. Create an importable package under `experiments/`, e.g.
    `experiments/my_idea/` (underscores — it's a Python package).
 2. Split a thin `cli.py` (`click`) from a `click`-free domain module that takes
