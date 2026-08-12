@@ -58,11 +58,27 @@ cp .env.example .env
 prompted for (the password with hidden input), so you can also just run a
 command and type the values when asked.
 
-> **MFA / SSO:** if your account uses MFA or external-browser SSO, each command
-> opens its own connection and would normally re-prompt. The project depends on
-> `snowflake-connector-python[secure-local-storage]`, which caches the token
-> after the first approval so `run` → `report` → `cleanup` don't each pop an MFA
-> push.
+> **MFA / SSO token caching.** If your account uses MFA or external-browser
+> SSO, each command opens its own connection and would otherwise re-prompt. The
+> project depends on `snowflake-connector-python[secure-local-storage]`, which
+> caches the token after the first approval so `run` → `report` → `cleanup`
+> don't each pop a prompt.
+>
+> The token is stored in your OS credential store, and `poetry install` pulls in
+> the right backend for your platform automatically — no configuration or
+> OS-specific setup:
+>
+> - **Windows** — Windows Credential Manager. Silent; no extra prompt.
+> - **Linux (desktop)** — Secret Service (GNOME Keyring / KWallet); may ask once
+>   to unlock the keyring.
+> - **macOS** — the login Keychain. The first run shows a system dialog asking
+>   to authorize the Python binary's access to the cached token — click
+>   **Always Allow** so later commands don't re-prompt. (A later Python upgrade
+>   can make it ask once more, since the grant is tied to the binary.)
+>
+> On a headless machine with no credential store, caching is simply skipped and
+> you'll be prompted per command — use `--connection`, env vars, key-pair, or
+> SSO for unattended runs.
 
 ## Usage
 
