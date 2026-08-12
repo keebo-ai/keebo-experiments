@@ -11,8 +11,7 @@ reference implementation — copy its shape.
 ## The shape of an experiment
 
 ```
-experiments/<short_name>/        # underscores — it's an importable Python package
-├── __init__.py
+experiments/<short_name>/        # underscores — it's an importable package (PEP 420, no __init__.py)
 ├── cli.py          # thin click command layer (the ONLY place click is imported)
 ├── <name>.py       # domain logic: no click, takes an open connection/client
 └── README.md       # what it demonstrates, the blog post, how to run it, cost
@@ -46,8 +45,8 @@ Two rules do most of the work:
 
 ## Steps
 
-1. Create `experiments/<short_name>/` with `cli.py`, your domain module,
-   `__init__.py`, and `README.md`.
+1. Create `experiments/<short_name>/` with `cli.py`, your domain module, and
+   `README.md` (no `__init__.py` needed — it's a namespace package).
 2. Register the console script in the root `pyproject.toml`:
 
    ```toml
