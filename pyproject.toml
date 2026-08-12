@@ -1,0 +1,35 @@
+[project]
+name = "keebo-experiments"
+version = "0.1.0"
+description = "Runnable experiments demonstrating concepts from the Keebo blog (https://keebo.ai/blog)."
+authors = [{ name = "Keebo", email = "hello@keebo.ai" }]
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11,<4.0"
+dependencies = []
+
+[project.urls]
+Homepage = "https://keebo.ai"
+Blog = "https://keebo.ai/blog"
+Repository = "https://github.com/keebo-ai/keebo-experiments"
+
+[tool.poetry]
+package-mode = false
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+ruff = "^0.6"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"
