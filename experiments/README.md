@@ -23,4 +23,8 @@ copy-paste skeleton for a new experiment.
   the root `pyproject.toml`.
 - Never commit real credentials. Read secrets from environment variables (a
   `.env` file, loaded via `python-dotenv`; see `.env.example`).
+- Never commit run output either. Results, manifests, and exports belong to
+  whoever ran the experiment, not to the repo. Name them
+  `<experiment>-run-<token>.<ext>` or write them under `runs/`; both are already
+  git-ignored, so a new experiment needs no `.gitignore` change.
 - Mirror the source tree under `tests/unit/` so tests are easy to find.

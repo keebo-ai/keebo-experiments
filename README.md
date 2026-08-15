@@ -15,6 +15,12 @@ end-to-end, then adapt it to your own environment.
   size and reads the timings and credits back from `ACCOUNT_USAGE`, so you can
   plot your own sizing curve and find the cost sweet spot.
   Run: `poetry run warehouse-sizing-benchmark --help`.
+- [**multi-cluster-billing**](./experiments/multi_cluster_billing/) — a `click`
+  CLI that settles whether Snowflake's 60-second billing minimum applies once
+  per warehouse start or once per cluster, by driving dedicated multi-cluster
+  warehouses through timed scale-out cycles and reading the bill back from
+  `ACCOUNT_USAGE`. Requires the Enterprise edition.
+  Run: `poetry run multi-cluster-billing --help`.
 
 > **Disclaimer:** These experiments run against **your own** data warehouse and cloud accounts, and any compute, storage, or query costs they incur are **your responsibility**. Keebo makes no guarantee that any experiment will be cheap, cost-neutral, or cost-saving, and provides them "as is," without warranty of any kind. Review what an experiment does and estimate its cost before you run it.
 

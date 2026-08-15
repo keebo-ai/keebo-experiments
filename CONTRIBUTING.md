@@ -46,6 +46,10 @@ above when it doesn't.
   then an interactive prompt for anything missing (`click.prompt`, hidden input
   for the password). See `common/snowflake.py` and the warehouse experiment's
   `cli.py`. Add any new env vars to `.env.example`. Never commit real secrets.
+- **Run output** stays out of git. Anything an experiment writes — result files,
+  run manifests, exports — describes one person's warehouse rather than the
+  repo, so name it `<experiment>-run-<token>.<ext>` or write it under `runs/`.
+  Both patterns are already in `.gitignore`; don't add per-experiment entries.
 - **Types & style:** `from __future__ import annotations`, full type hints,
   frozen dataclasses for models. Ruff (`E,F,I,UP,B`, line length 120) and
   Python 3.14.
