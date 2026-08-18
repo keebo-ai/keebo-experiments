@@ -22,6 +22,7 @@ Repository = "https://github.com/keebo-ai/keebo-experiments"
 # Each experiment exposes a console script so it runs as `poetry run <name>`.
 [project.scripts]
 warehouse-sizing-benchmark = "experiments.warehouse_sizing_benchmark.cli:cli"
+multi-cluster-billing = "experiments.multi_cluster_billing.cli:cli"
 
 [tool.poetry]
 # Installable so the console scripts above are created. `common/` holds shared

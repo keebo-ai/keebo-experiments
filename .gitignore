@@ -88,3 +88,14 @@ credentials.json
 
 # Local planning/design docs — never published to this public repo
 docs/superpowers/
+
+# Experiment output — the record of an actual run against a real warehouse.
+# It is one account's timings, credits, and warehouse names, so it is local
+# data rather than repo content. The CLIs write into whatever directory they
+# are run from, so these patterns stay unanchored on purpose. An experiment
+# that writes results names them `<experiment>-run-<token>.<ext>` or puts them
+# under `runs/`, so new experiments land here without touching this file.
+*-run-*.json
+*-run-*.csv
+*-run-*.txt
+runs/

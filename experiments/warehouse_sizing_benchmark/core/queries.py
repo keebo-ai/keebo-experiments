@@ -7,7 +7,18 @@ or CLI dependencies here.
 
 from __future__ import annotations
 
-import re
+from common.sql import validate_identifier
+
+__all__ = [
+    "BENCHMARK_QUERY",
+    "DEFAULT_TABLE",
+    "DEFAULT_WAREHOUSE",
+    "QUERY_TAG_PREFIX",
+    "REPORT_STEPS",
+    "SIZES",
+    "SIZE_KEYWORDS",
+    "validate_identifier",
+]
 
 # --------------------------------------------------------------------------- #
 # The benchmark workload
@@ -41,16 +52,10 @@ DEFAULT_TABLE = "SNOWFLAKE_SAMPLE_DATA.TPCH_SF100.LINEITEM"
 DEFAULT_WAREHOUSE = "SIZING_BENCHMARK_WH"
 QUERY_TAG_PREFIX = "wsbench"
 
-# Identifiers we interpolate into SQL are validated against this first —
-# belt-and-suspenders against injection, since they arrive from CLI flags.
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.$]+$")
-
-
-def validate_identifier(value: str, label: str) -> str:
-    """Return ``value`` if it is a safe SQL identifier, else raise ``ValueError``."""
-    if not _IDENTIFIER_RE.match(value):
-        raise ValueError(f"{label} must match [A-Za-z0-9_.$]+, got {value!r}")
-    return value
+# Identifiers we interpolate into SQL are validated first — belt-and-suspenders
+# against injection, since they arrive from CLI flags. The check itself is shared
+# with the other experiments in `common/`, and re-exported here so callers keep
+# reaching for it through `queries`.
 
 
 # --------------------------------------------------------------------------- #
