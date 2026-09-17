@@ -720,14 +720,14 @@ files = [
 
 [[package]]
 name = "mockito"
-version = "1.5.5"
+version = "2.0.4"
 description = "Spying framework"
 optional = false
-python-versions = ">=3.7"
+python-versions = ">=3.8"
 groups = ["dev"]
 files = [
-    {file = "mockito-1.5.5-py3-none-any.whl", hash = "sha256:422a6ce2666e3c32d756547b98ee67e83a339f457e132476689643015845fc36"},
-    {file = "mockito-1.5.5.tar.gz", hash = "sha256:49826e3901dc826d0204e93b16dce1c61dde9d3a94eadc9c209ab0e130283393"},
+    {file = "mockito-2.0.4-py3-none-any.whl", hash = "sha256:04d7e6e9b9b7288e76235b894f9b3cbfdc9cfc631e548ed607933146ae9db1f5"},
+    {file = "mockito-2.0.4.tar.gz", hash = "sha256:d341f228c5b5ccf3c473751f6c6f09d8d83c5da49846a6ee31eb60b65607e0ef"},
 ]
 
 [[package]]
@@ -1381,4 +1381,4 @@ dev = ["pytest", "setuptools"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.14,<4.0"
-content-hash = "7c03c2a1949aebe8e13bba7e3dbbf11efe1bbb7baf59bdf3e0e1b762fe3c4dcc"
+content-hash = "653939f5b1079a9608897c5deba86c50fb8159d1a1a1dbefa839b02658e20ef4"
