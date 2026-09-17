@@ -1,6 +1,6 @@
 [project]
 name = "keebo-experiments"
-version = "0.3.1"
+version = "0.4.0"
 description = "Runnable experiments demonstrating concepts from the Keebo blog (https://keebo.ai/blog)."
 authors = [{ name = "Keebo", email = "hello@keebo.ai" }]
 readme = "README.md"
