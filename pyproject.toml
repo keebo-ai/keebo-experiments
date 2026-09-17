@@ -11,7 +11,7 @@ dependencies = [
     # secure-local-storage pulls in keyring so the connector can cache SSO/MFA
     # tokens — one approval per session instead of a prompt on every connect.
     "snowflake-connector-python[secure-local-storage]>=3.12",
-    "python-dotenv>=1.0",
+    "python-dotenv>=1.2.3",
 ]
 
 [project.urls]
