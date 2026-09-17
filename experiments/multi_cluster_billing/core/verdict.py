@@ -612,6 +612,14 @@ def _unsettled_paragraphs(result: Verdict) -> list[str]:
 
     if not result.fits:
         rule, miss = _closest_rule(result)
+        if rule is None:
+            # Nothing that decides produced a replicate — only the cross-check
+            # ran — so there is no closest rule to name and nothing to conclude.
+            return [
+                "Only the cross-check scenario produced usable replicates, and it is not built to decide "
+                "between the four ways of charging. Nothing this run measured settles the question; re-run so "
+                "the measured scenarios land."
+            ]
         return [
             "None of the four ways of charging fits. Each mispredicts at least one scenario, and the closest "
             f"of them — {RULE_TEXT[rule].says} — is still off by {_seconds(miss)} seconds. A miss that size is "

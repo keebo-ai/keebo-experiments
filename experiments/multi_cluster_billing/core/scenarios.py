@@ -414,8 +414,15 @@ def run_natural_rep(
     query_ids: list[str] = []
     for _ in range(2):
         query_cursor = conn.cursor()
-        query_cursor.execute_async(sql)
-        query_ids.append(query_cursor.sfqid)
+        try:
+            query_cursor.execute_async(sql)
+            query_ids.append(query_cursor.sfqid)
+        finally:
+            # Only the query id is needed from here on — completion is polled on
+            # the connection, not the cursor — so the cursor is closed rather
+            # than left open for the rest of the run. Closing a cursor does not
+            # cancel the async query it submitted.
+            query_cursor.close()
     echo(f"  natural: submitted 2 concurrent queries ({', '.join(query_ids)})")
 
     reached = wait_for(
