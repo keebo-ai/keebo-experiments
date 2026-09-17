@@ -83,6 +83,9 @@ def predict(rule: str, *, warehouse_seconds: float, extras: list[Extra]) -> floa
     total is rounded up because the meter bills whole seconds.
     """
     base = max(queries.MINIMUM_SECONDS, float(warehouse_seconds))
+    # One ceil over the whole cycle: a cycle that straddles an hour boundary is
+    # metered as two hourly rows, each rounded up, so its bill can land a second
+    # above this — within MATCH_TOLERANCE_SECONDS, so it does not change a verdict.
     return float(math.ceil(base + sum(charge(rule, extra) for extra in extras)))
 
 
@@ -336,12 +339,14 @@ def compute_verdict(observations: list[Observation]) -> Verdict:
         )
 
     named = _listed([RULE_TEXT[rule].says for rule in fits])
-    separator = _separating_scenario(decide, fits)
-    designed = _designed_separator(fits)
-    if separator:
-        hint = f" — {separator} is the scenario that tells them apart, so check its replicates first"
-    elif designed:
-        hint = f" — {designed} is the scenario built to tell them apart, and it produced no usable replicates here"
+    separation = _separators(fits, decide)
+    if separation.by_run:
+        hint = f" — {separation.by_run} is the scenario that tells them apart, so check its replicates first"
+    elif separation.by_design:
+        hint = (
+            f" — {separation.by_design[0]} is the scenario built to tell them apart, and it produced no usable "
+            "replicates here"
+        )
     else:
         hint = ""
     return Verdict(
@@ -352,27 +357,25 @@ def compute_verdict(observations: list[Observation]) -> Verdict:
     )
 
 
-def _separating_scenario(results: list[ScenarioResult], fits: list[str]) -> str | None:
-    """The scenario whose predictions for the surviving rules differ most.
+@dataclass(frozen=True)
+class Separation:
+    """Which scenario(s) tell a set of still-standing rules apart.
 
-    Named in an inconclusive verdict so the reader knows which measurement to
-    look at rather than being told to look at all of them.
+    ``by_run`` is the scenario this run actually measured a difference in
+    (``None`` if none did); ``by_design`` ranks the scenarios the experiment is
+    designed to separate them by, widest nominal margin first. The inconclusive
+    narrative prefers ``by_run`` and falls back to ``by_design``.
     """
-    best_name, best_spread = None, 0.0
-    for result in results:
-        values = [result.predicted_extra_charge[rule] for rule in fits]
-        spread = max(values) - min(values) if values else 0.0
-        if spread > best_spread:
-            best_name, best_spread = result.name, spread
-    return best_name
+
+    by_run: str | None
+    by_design: list[str]
 
 
-def _spread_by_design(spec: queries.ScenarioSpec, rules: list[str]) -> float:
-    """How far apart `rules` predictions are for one scenario as designed.
+def _designed_spread(spec: queries.ScenarioSpec, rules: list[str]) -> float:
+    """How far apart ``rules``' extra-cluster charges are for one scenario as designed.
 
-    Read off the nominal scenario table rather than off a run, so it answers
-    "which scenario is supposed to separate these" even for a scenario that
-    produced no replicates.
+    Read off the nominal scenario table rather than off a run, so it can speak
+    for a scenario that produced no replicates.
     """
     extras = [
         Extra(start_offset=float(spec.scale_out_at_seconds), seconds=float(spec.extra_cluster_seconds))
@@ -382,34 +385,27 @@ def _spread_by_design(spec: queries.ScenarioSpec, rules: list[str]) -> float:
     return max(values) - min(values) if values else 0.0
 
 
-def _designed_separator(fits: list[str]) -> str | None:
-    """The scenario the design relies on to tell `fits` apart, run or not.
+def _separators(rules: list[str], measured: list[ScenarioResult], *, exclude: str | None = None) -> Separation:
+    """The scenario(s) that tell ``rules`` apart: one a run measured, and the ones the design relies on.
 
-    ``_separating_scenario`` can only speak for scenarios that produced
-    replicates. When the one scenario that discriminates is exactly the one that
-    failed, that leaves the reader with no name to chase, which is the moment
-    they most need one.
+    ``by_run`` is the measured scenario whose replicates spread ``rules``'
+    predicted charges widest (``None`` if none did). ``by_design`` ranks the
+    scenarios the design separates them by, widest nominal margin first, skipping
+    ``exclude`` — so a run with no separating measurement still names where the
+    answer would come from, and a scenario never points at itself.
     """
-    best_name, best_spread = None, 0.0
-    for spec in queries.MEASURED_SCENARIOS:
-        spread = _spread_by_design(spec, fits)
-        if spread > best_spread:
-            best_name, best_spread = spec.name, spread
-    return best_name
-
-
-def _designed_separators(rules: list[str], *, other_than: str) -> list[str]:
-    """Every other scenario that tells `rules` apart, widest margin first.
-
-    A scenario that leaves several rules standing has not endorsed any of them;
-    it has simply failed to separate them. Naming the scenarios that do separate
-    them turns that into something the reader can go and check, instead of a
-    list of claims sitting under the word "Conclusion".
-    """
-    apart = [
-        (spec.name, _spread_by_design(spec, rules)) for spec in queries.MEASURED_SCENARIOS if spec.name != other_than
-    ]
-    return [name for name, spread in sorted(apart, key=lambda pair: -pair[1]) if spread > 0]
+    by_run: str | None = None
+    best = 0.0
+    for result in measured:
+        values = [result.predicted_extra_charge[rule] for rule in rules]
+        spread = max(values) - min(values) if values else 0.0
+        if spread > best:
+            by_run, best = result.name, spread
+    ranked = sorted(
+        ((spec.name, _designed_spread(spec, rules)) for spec in queries.MEASURED_SCENARIOS if spec.name != exclude),
+        key=lambda pair: -pair[1],
+    )
+    return Separation(by_run=by_run, by_design=[name for name, spread in ranked if spread > 0])
 
 
 # --------------------------------------------------------------------------- #
@@ -514,7 +510,7 @@ def scenario_conclusion(result: ScenarioResult) -> str:
             f"It cannot choose between the other {_counted(len(survived))}, which {both} predict that same "
             f"figure: {agreeing}."
         )
-        elsewhere = _designed_separators(survived, other_than=result.name)
+        elsewhere = _separators(survived, [], exclude=result.name).by_design
         if elsewhere:
             parts.append(f"Which of them holds is settled by {_named(elsewhere)}, not here.")
     else:
@@ -629,17 +625,16 @@ def _unsettled_paragraphs(result: Verdict) -> list[str]:
         ]
 
     names = _listed([RULE_TEXT[rule].says for rule in result.fits])
-    separator = _separating_scenario(deciding(result.scenarios), result.fits)
-    designed = _designed_separator(result.fits)
-    if separator:
+    separation = _separators(result.fits, deciding(result.scenarios))
+    if separation.by_run:
         where = (
-            f"The scenario that would separate them is {separator}; look at whether its replicates reached the "
-            "cluster count they were meant to."
+            f"The scenario that would separate them is {separation.by_run}; look at whether its replicates reached "
+            "the cluster count they were meant to."
         )
-    elif designed:
+    elif separation.by_design:
         where = (
-            f"Nothing this run measured tells them apart. The scenario built to do it is {designed}, and it "
-            "produced no usable replicates here, so re-run it before drawing a conclusion."
+            f"Nothing this run measured tells them apart. The scenario built to do it is {separation.by_design[0]}, "
+            "and it produced no usable replicates here, so re-run it before drawing a conclusion."
         )
     else:
         where = "No scenario in this run predicts different bills for them, so the run cannot separate them at all."

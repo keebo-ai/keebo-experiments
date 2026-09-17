@@ -182,16 +182,16 @@ replicates back to back, would let it.
 cp .env.example .env      # fill in your Snowflake account, user, credential
 poetry install
 
-poetry run multi-cluster-billing run
+poetry run keebo-experiments multi-cluster-billing run
 # ... about an hour ...
 
 # Safe to run at any point. A metering row appears only once its hour has
 # closed, and ACCOUNT_USAGE can lag up to 3 hours after that, but it is often
 # much quicker, so this asks whether the rows are there rather than waiting out
 # the worst case.
-poetry run multi-cluster-billing report
+poetry run keebo-experiments multi-cluster-billing report
 
-poetry run multi-cluster-billing cleanup
+poetry run keebo-experiments multi-cluster-billing cleanup
 ```
 
 The three commands are separate because cluster lifetimes are the measurement

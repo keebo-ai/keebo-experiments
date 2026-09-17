@@ -27,17 +27,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from common.tables import ReportTable
 from experiments.multi_cluster_billing.core import events, manifest, queries, verdict
-
-
-@dataclass(frozen=True)
-class ReportTable:
-    """One reporting query's result: its step number, title, and rows."""
-
-    step: int
-    title: str
-    columns: list[str]
-    rows: list[tuple[Any, ...]]
 
 
 @dataclass(frozen=True)
@@ -74,31 +65,18 @@ def _fetch(cur, sql: str) -> tuple[list[str], list[tuple[Any, ...]]]:
     return columns, rows
 
 
-def read_metering(conn, run: manifest.RunManifest) -> tuple[list[str], list[tuple[Any, ...]]]:
-    """Read `credits_used_compute` per warehouse for this run's window."""
+def _read(conn, run: manifest.RunManifest, sql: str) -> tuple[list[str], list[tuple[Any, ...]]]:
+    """Run one windowed reporting query scoped to this run's warehouses.
+
+    The metering and events reads differ only by the SQL constant — same
+    warehouse list, same padded window — so they share one body.
+    """
     window_start, window_end = _window(run)
     cur = conn.cursor()
     try:
         return _fetch(
             cur,
-            queries.METERING_SQL.format(
-                names=_quote_list(run.warehouses),
-                window_start=window_start,
-                window_end=window_end,
-            ),
-        )
-    finally:
-        cur.close()
-
-
-def read_events(conn, run: manifest.RunManifest) -> tuple[list[str], list[tuple[Any, ...]]]:
-    """Read this run's warehouse events, in the order the pairing needs."""
-    window_start, window_end = _window(run)
-    cur = conn.cursor()
-    try:
-        return _fetch(
-            cur,
-            queries.EVENTS_SQL.format(
+            sql.format(
                 names=_quote_list(run.warehouses),
                 window_start=window_start,
                 window_end=window_end,
@@ -120,6 +98,9 @@ def _polled_seconds(item: manifest.Replicate) -> float:
     by the resume-provisioning and suspend-drain latency, which would make a
     slow resume look like a missed event.
     """
+    # Resume is confirmed only on full STARTED while suspend is confirmed on the
+    # first SUSPENDED/SUSPENDING poll, so this interval is biased slightly short —
+    # harmless, since it only feeds the WARNING-only disagreement check.
     start = datetime.fromisoformat(item.resume_confirmed_at)
     end = datetime.fromisoformat(item.suspend_confirmed_at)
     return (end - start).total_seconds()
@@ -319,7 +300,7 @@ def read_report(conn, run: manifest.RunManifest, *, now: datetime | None = None)
 
     tables: list[ReportTable] = [_run_table(run), _replicate_table(run, {}, {})]
 
-    metering_columns, metering_rows = read_metering(conn, run)
+    metering_columns, metering_rows = _read(conn, run, queries.METERING_SQL)
     tables.append(
         ReportTable(
             step=3,
@@ -333,7 +314,7 @@ def read_report(conn, run: manifest.RunManifest, *, now: datetime | None = None)
     if absent:
         return ReportSummary(tables, None, None, None, _missing_metering_reason(run, absent, moment))
 
-    event_columns, event_rows = read_events(conn, run)
+    event_columns, event_rows = _read(conn, run, queries.EVENTS_SQL)
     tables.append(
         ReportTable(
             step=4,

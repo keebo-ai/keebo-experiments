@@ -25,7 +25,7 @@ def runner() -> CliRunner:
 
 @contextmanager
 def fake_open(_connection_name: str | None = None) -> Iterator[Any]:
-    """Stands in for `_open`: yields something a domain function would accept."""
+    """Stands in for `open_connection`: yields something a domain function would accept."""
     yield object()
 
 
@@ -130,7 +130,7 @@ def make_summary(
 
 
 def test_help_lists_the_three_commands(runner):
-    result = runner.invoke(cli.cli, ["--help"])
+    result = runner.invoke(cli.multi_cluster_billing, ["--help"])
 
     assert result.exit_code == 0
     for command in ("run", "report", "cleanup"):
@@ -138,7 +138,7 @@ def test_help_lists_the_three_commands(runner):
 
 
 def test_help_states_the_questions_the_run_answers(runner):
-    result = runner.invoke(cli.cli, ["--help"])
+    result = runner.invoke(cli.multi_cluster_billing, ["--help"])
 
     assert "before it has run a minute" in result.output
     assert "when an extra cluster starts" in result.output
@@ -152,8 +152,8 @@ def test_run_defaults_to_four_replicates(monkeypatch, runner):
         return make_run_manifest()
 
     monkeypatch.setattr(cli.scenarios, "run_experiment", fake_run_experiment)
-    monkeypatch.setattr(cli, "_open", fake_open)
-    result = runner.invoke(cli.cli, ["run", "--yes"])
+    monkeypatch.setattr(cli, "open_connection", fake_open)
+    result = runner.invoke(cli.multi_cluster_billing, ["run", "--yes"])
     assert result.exit_code == 0, result.output
     assert captured["replicates"] == 4
     assert captured["resource_constraint"] == "STANDARD_GEN_2"
@@ -161,7 +161,7 @@ def test_run_defaults_to_four_replicates(monkeypatch, runner):
 
 
 def test_the_batch_flag_is_gone(runner):
-    result = runner.invoke(cli.cli, ["run", "--batch", "--yes"])
+    result = runner.invoke(cli.multi_cluster_billing, ["run", "--batch", "--yes"])
     assert result.exit_code != 0
     assert "no such option" in result.output.lower()
 
@@ -176,17 +176,17 @@ def test_the_checkpoint_writes_the_manifest(monkeypatch, tmp_path, runner):
         return record
 
     monkeypatch.setattr(cli.scenarios, "run_experiment", fake_run_experiment)
-    monkeypatch.setattr(cli, "_open", fake_open)
+    monkeypatch.setattr(cli, "open_connection", fake_open)
     monkeypatch.setattr(cli.manifest, "save", lambda record, path: written.append(path) or path)
-    result = runner.invoke(cli.cli, ["run", "--yes", "--manifest", str(tmp_path / "m.json")])
+    result = runner.invoke(cli.multi_cluster_billing, ["run", "--yes", "--manifest", str(tmp_path / "m.json")])
     assert result.exit_code == 0, result.output
     assert len(written) == 2
     assert all(str(p) == str(tmp_path / "m.json") for p in written)
 
 
 def test_the_cost_confirmation_names_the_real_figures(runner, monkeypatch):
-    monkeypatch.setattr(cli, "_open", fake_open)
-    result = runner.invoke(cli.cli, ["run"], input="n\n")
+    monkeypatch.setattr(cli, "open_connection", fake_open)
+    result = runner.invoke(cli.multi_cluster_billing, ["run"], input="n\n")
     assert "about an hour" in result.output
     assert "2 credits" in result.output
 
@@ -196,18 +196,18 @@ def test_run_surfaces_a_domain_error_as_a_clean_message(monkeypatch, runner):
         raise ValueError("requires the Enterprise edition")
 
     monkeypatch.setattr(cli.scenarios, "run_experiment", fake_run_experiment)
-    monkeypatch.setattr(cli, "_open", fake_open)
-    result = runner.invoke(cli.cli, ["run", "--yes"])
+    monkeypatch.setattr(cli, "open_connection", fake_open)
+    result = runner.invoke(cli.multi_cluster_billing, ["run", "--yes"])
 
     assert result.exit_code != 0
     assert "Enterprise edition" in result.output
 
 
 def test_report_shows_what_the_bills_were_decoded_with_before_the_verdict(monkeypatch, runner):
-    monkeypatch.setattr(cli, "_open", fake_open)
+    monkeypatch.setattr(cli, "open_connection", fake_open)
     monkeypatch.setattr(cli.manifest, "load", lambda path: make_run_manifest())
     monkeypatch.setattr(cli.report_core, "read_report", lambda conn, run: make_summary())
-    result = runner.invoke(cli.cli, ["report", "--manifest", "m.json"])
+    result = runner.invoke(cli.multi_cluster_billing, ["report", "--manifest", "m.json"])
     assert result.exit_code == 0, result.output
     # The rate is what turns credits into seconds, so a reader has to be able to
     # check it before anything downstream of it is worth reading.
@@ -217,10 +217,10 @@ def test_report_shows_what_the_bills_were_decoded_with_before_the_verdict(monkey
 
 
 def test_report_names_every_rule_still_standing_when_inconclusive(monkeypatch, runner):
-    monkeypatch.setattr(cli, "_open", fake_open)
+    monkeypatch.setattr(cli, "open_connection", fake_open)
     monkeypatch.setattr(cli.manifest, "load", lambda path: make_run_manifest())
     monkeypatch.setattr(cli.report_core, "read_report", lambda conn, run: make_summary(inconclusive=True))
-    result = runner.invoke(cli.cli, ["report", "--manifest", "m.json"])
+    result = runner.invoke(cli.multi_cluster_billing, ["report", "--manifest", "m.json"])
     assert "INCONCLUSIVE" in result.output
     # In words, not by constant name: the reader is told what each surviving rule
     # would mean, and which scenario would have told them apart.
@@ -229,22 +229,22 @@ def test_report_names_every_rule_still_standing_when_inconclusive(monkeypatch, r
 
 
 def test_report_leads_with_a_failed_minimum_premise(monkeypatch, runner):
-    monkeypatch.setattr(cli, "_open", fake_open)
+    monkeypatch.setattr(cli, "open_connection", fake_open)
     monkeypatch.setattr(cli.manifest, "load", lambda path: make_run_manifest())
     monkeypatch.setattr(cli.report_core, "read_report", lambda conn, run: make_summary(minimum_holds=False))
-    result = runner.invoke(cli.cli, ["report", "--manifest", "m.json"])
+    result = runner.invoke(cli.multi_cluster_billing, ["report", "--manifest", "m.json"])
     assert "no 60-second minimum" in result.output.lower()
 
 
 def test_report_prints_the_not_ready_reason_instead_of_a_verdict(monkeypatch, runner):
-    monkeypatch.setattr(cli, "_open", fake_open)
+    monkeypatch.setattr(cli, "open_connection", fake_open)
     monkeypatch.setattr(cli.manifest, "load", lambda path: make_run_manifest())
     monkeypatch.setattr(
         cli.report_core,
         "read_report",
         lambda conn, run: make_summary(not_ready_reason="metering is not due until 18:00"),
     )
-    result = runner.invoke(cli.cli, ["report", "--manifest", "m.json"])
+    result = runner.invoke(cli.multi_cluster_billing, ["report", "--manifest", "m.json"])
 
     assert result.exit_code == 0, result.output
     assert "not due until 18:00" in result.output
@@ -258,21 +258,21 @@ def test_cleanup_drops_the_manifest_s_warehouses(monkeypatch, tmp_path, runner):
         dropped["warehouses"] = warehouses
 
     path = manifest.save(make_run_manifest(), tmp_path / "run.json")
-    monkeypatch.setattr(cli, "_open", fake_open)
+    monkeypatch.setattr(cli, "open_connection", fake_open)
     monkeypatch.setattr(cli.scenarios, "drop_warehouses", fake_drop)
 
-    result = runner.invoke(cli.cli, ["cleanup", "--manifest", str(path), "--yes"])
+    result = runner.invoke(cli.multi_cluster_billing, ["cleanup", "--manifest", str(path), "--yes"])
 
     assert result.exit_code == 0, result.output
     assert dropped["warehouses"] == make_run_manifest().warehouses
 
 
 def test_report_states_the_answer_in_words_before_the_scenario_by_scenario_detail(monkeypatch, runner):
-    monkeypatch.setattr(cli, "_open", fake_open)
+    monkeypatch.setattr(cli, "open_connection", fake_open)
     monkeypatch.setattr(cli.manifest, "load", lambda path: make_run_manifest())
     monkeypatch.setattr(cli.report_core, "read_report", lambda conn, run: make_summary())
     with runner.isolated_filesystem():
-        result = runner.invoke(cli.cli, ["report", "--manifest", "m.json"])
+        result = runner.invoke(cli.multi_cluster_billing, ["report", "--manifest", "m.json"])
 
     assert result.exit_code == 0, result.output
     # The prose is wrapped to the terminal width, so it is read back unwrapped.
@@ -281,11 +281,11 @@ def test_report_states_the_answer_in_words_before_the_scenario_by_scenario_detai
 
 
 def test_report_answers_each_question_with_its_evidence(monkeypatch, runner):
-    monkeypatch.setattr(cli, "_open", fake_open)
+    monkeypatch.setattr(cli, "open_connection", fake_open)
     monkeypatch.setattr(cli.manifest, "load", lambda path: make_run_manifest())
     monkeypatch.setattr(cli.report_core, "read_report", lambda conn, run: make_summary())
     with runner.isolated_filesystem():
-        result = runner.invoke(cli.cli, ["report", "--manifest", "m.json"])
+        result = runner.invoke(cli.multi_cluster_billing, ["report", "--manifest", "m.json"])
 
     assert "the questions this run set out to answer" in result.output
     for number in range(1, 5):
@@ -296,11 +296,11 @@ def test_report_answers_each_question_with_its_evidence(monkeypatch, runner):
 
 
 def test_report_explains_each_scenario_and_what_its_numbers_settle(monkeypatch, runner):
-    monkeypatch.setattr(cli, "_open", fake_open)
+    monkeypatch.setattr(cli, "open_connection", fake_open)
     monkeypatch.setattr(cli.manifest, "load", lambda path: make_run_manifest())
     monkeypatch.setattr(cli.report_core, "read_report", lambda conn, run: make_summary())
     with runner.isolated_filesystem():
-        result = runner.invoke(cli.cli, ["report", "--manifest", "m.json"])
+        result = runner.invoke(cli.multi_cluster_billing, ["report", "--manifest", "m.json"])
 
     for spec in queries.MEASURED_SCENARIOS:
         assert f"  {spec.name}\n" in result.output
@@ -309,11 +309,11 @@ def test_report_explains_each_scenario_and_what_its_numbers_settle(monkeypatch, 
 
 
 def test_report_writes_the_results_and_verdict_to_a_file(monkeypatch, runner):
-    monkeypatch.setattr(cli, "_open", fake_open)
+    monkeypatch.setattr(cli, "open_connection", fake_open)
     monkeypatch.setattr(cli.manifest, "load", lambda path: make_run_manifest())
     monkeypatch.setattr(cli.report_core, "read_report", lambda conn, run: make_summary())
     with runner.isolated_filesystem():
-        result = runner.invoke(cli.cli, ["report", "--manifest", "m.json"])
+        result = runner.invoke(cli.multi_cluster_billing, ["report", "--manifest", "m.json"])
         written = Path("cluster-billing-run-20260813T140000.txt")
 
         assert result.exit_code == 0, result.output
@@ -331,18 +331,18 @@ def test_report_writes_the_results_and_verdict_to_a_file(monkeypatch, runner):
 
 
 def test_the_out_flag_chooses_where_the_report_lands(monkeypatch, runner):
-    monkeypatch.setattr(cli, "_open", fake_open)
+    monkeypatch.setattr(cli, "open_connection", fake_open)
     monkeypatch.setattr(cli.manifest, "load", lambda path: make_run_manifest())
     monkeypatch.setattr(cli.report_core, "read_report", lambda conn, run: make_summary())
     with runner.isolated_filesystem():
-        result = runner.invoke(cli.cli, ["report", "--manifest", "m.json", "--out", "out/answer.txt"])
+        result = runner.invoke(cli.multi_cluster_billing, ["report", "--manifest", "m.json", "--out", "out/answer.txt"])
 
         assert result.exit_code == 0, result.output
         assert "The answer:" in Path("out/answer.txt").read_text()
 
 
 def test_a_report_with_no_verdict_yet_is_still_written(monkeypatch, runner):
-    monkeypatch.setattr(cli, "_open", fake_open)
+    monkeypatch.setattr(cli, "open_connection", fake_open)
     monkeypatch.setattr(cli.manifest, "load", lambda path: make_run_manifest())
     monkeypatch.setattr(
         cli.report_core,
@@ -350,18 +350,18 @@ def test_a_report_with_no_verdict_yet_is_still_written(monkeypatch, runner):
         lambda conn, run: make_summary(not_ready_reason="metering is not due until 18:00"),
     )
     with runner.isolated_filesystem():
-        result = runner.invoke(cli.cli, ["report", "--manifest", "m.json"])
+        result = runner.invoke(cli.multi_cluster_billing, ["report", "--manifest", "m.json"])
 
         assert result.exit_code == 0, result.output
         assert "not due until 18:00" in Path("cluster-billing-run-20260813T140000.txt").read_text()
 
 
 def test_the_no_file_flag_prints_without_writing(monkeypatch, runner):
-    monkeypatch.setattr(cli, "_open", fake_open)
+    monkeypatch.setattr(cli, "open_connection", fake_open)
     monkeypatch.setattr(cli.manifest, "load", lambda path: make_run_manifest())
     monkeypatch.setattr(cli.report_core, "read_report", lambda conn, run: make_summary())
     with runner.isolated_filesystem():
-        result = runner.invoke(cli.cli, ["report", "--manifest", "m.json", "--no-file"])
+        result = runner.invoke(cli.multi_cluster_billing, ["report", "--manifest", "m.json", "--no-file"])
 
         assert result.exit_code == 0, result.output
         assert list(Path().glob("*.txt")) == []

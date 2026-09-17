@@ -163,6 +163,8 @@ class ScenarioSpec:
     scale_out_at_seconds: int
     #: Offset from the resume at which the warehouse is suspended.
     cycle_seconds: int
+    #: Only NATURAL sets this (to 1, forcing one query per cluster so queued work
+    #: makes Snowflake scale out); ``None`` everywhere else leaves it off the DDL.
     max_concurrency_level: int | None
     kind: str
     reads: str

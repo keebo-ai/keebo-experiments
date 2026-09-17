@@ -59,8 +59,13 @@ def order_events(events: list[Event]) -> list[Event]:
 def parse_rows(columns: list[str], rows: list[tuple]) -> list[Event]:
     """Map cursor rows onto :class:`Event` by column name, not position."""
     index = {name.lower(): position for position, name in enumerate(columns)}
+    # These feed the non-optional Event fields; a view missing one would silently
+    # flow None into them, so fail clearly on the first absent column instead.
+    for required in ("warehouse_name", "event_name", "timestamp"):
+        if required not in index:
+            raise ValueError(f"WAREHOUSE_EVENTS_HISTORY is missing the {required} column")
 
-    def field_of(row: tuple, name: str):
+    def field_of(row: tuple, name: str) -> object:
         position = index.get(name)
         return row[position] if position is not None else None
 

@@ -1,46 +1,29 @@
 """Multi-cluster billing test — command-line front end.
 
-Thin ``click`` wrappers over the domain layer in :mod:`core`. Each command
-resolves Snowflake credentials from the environment, opens a connection, and
-hands it to a domain function. Credentials are read from ``.env`` (or the real
-environment); no secrets are passed as flags.
+Thin ``click`` wrappers over the domain layer in :mod:`core`. Mounted on the
+shared ``keebo-experiments`` CLI (see :mod:`common.cli`) as the
+``multi-cluster-billing`` command group::
 
-Installed as the ``multi-cluster-billing`` console script (see
-``pyproject.toml``), so it runs as::
+    poetry run keebo-experiments multi-cluster-billing run
+    poetry run keebo-experiments multi-cluster-billing report
+    poetry run keebo-experiments multi-cluster-billing cleanup
 
-    poetry run multi-cluster-billing run
-    poetry run multi-cluster-billing report
-    poetry run multi-cluster-billing cleanup
+Credentials, connection opening, and table rendering are shared helpers in
+``common`` so every experiment behaves identically.
 """
 
 from __future__ import annotations
 
 import textwrap
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 
 import click
-from dotenv import load_dotenv
 
-from common import snowflake as sf
+from common.credentials import connection_option, open_connection
+from common.render import table_lines
 from experiments.multi_cluster_billing.core import manifest, queries, questions, scenarios, verdict
 from experiments.multi_cluster_billing.core import report as report_core
 
-# Load .env once, so credentials can live in a file that git ignores.
-load_dotenv()
-
-_CONNECTION_OPTION = click.option(
-    "--connection",
-    "connection_name",
-    default=None,
-    help=(
-        "Name of an entry in Snowflake's connections.toml to connect with. "
-        "If omitted, credentials come from SNOWFLAKE_* env / .env, prompting "
-        "for anything missing."
-    ),
-)
 _MANIFEST_OPTION = click.option(
     "--manifest",
     "manifest_path",
@@ -50,62 +33,20 @@ _MANIFEST_OPTION = click.option(
 )
 
 
-def _resolve_credentials() -> sf.SnowflakeCredentials:
-    """Build credentials from the environment, prompting for what's missing."""
-    env = sf.env_credentials()
-    account = env["account"] or click.prompt("Snowflake account")
-    user = env["user"] or click.prompt("Snowflake user")
-    password = env["password"]
-    authenticator = env["authenticator"]
-    # Need one credential; prompt for a password only if SSO isn't configured.
-    if not password and not authenticator:
-        password = click.prompt("Snowflake password", hide_input=True)
-    return sf.SnowflakeCredentials(
-        account=account,
-        user=user,
-        password=password,
-        role=env["role"],
-        authenticator=authenticator,
-    )
-
-
-@contextmanager
-def _open(connection_name: str | None) -> Iterator[Any]:
-    """Open a connection, as a context manager."""
-    if connection_name:
-        with sf.connection(connection_name=connection_name) as conn:
-            yield conn
-    else:
-        with sf.connection(creds=_resolve_credentials()) as conn:
-            yield conn
-
-
 def _resolve_manifest(manifest_path: str | None) -> Path:
     if manifest_path:
         return Path(manifest_path)
     found = manifest.latest_path(".")
     if found is None:
-        raise click.ClickException("No run manifest found. Run `multi-cluster-billing run` first, or pass --manifest.")
+        raise click.ClickException(
+            "No run manifest found. Run `keebo-experiments multi-cluster-billing run` first, or pass --manifest."
+        )
     return found
 
 
 #: Width the prose is wrapped to. Narrow enough to stay readable in a terminal
 #: and in the report file, which is read in both.
 _PROSE_WIDTH = 96
-
-
-def _table_lines(table: report_core.ReportTable) -> list[str]:
-    """One report step as an aligned table."""
-    lines = ["", f"--- Step {table.step}. {table.title} ---"]
-    if not table.rows:
-        return [*lines, "  (no rows yet — ACCOUNT_USAGE may still be catching up)"]
-
-    cells_text = [[("" if value is None else str(value)) for value in row] for row in table.rows]
-    widths = [max(len(table.columns[i]), *(len(row[i]) for row in cells_text)) for i in range(len(table.columns))]
-    lines.append("  " + "  ".join(name.ljust(widths[i]) for i, name in enumerate(table.columns)))
-    lines.append("  " + "  ".join("-" * width for width in widths))
-    lines.extend("  " + "  ".join(row[i].ljust(widths[i]) for i in range(len(table.columns))) for row in cells_text)
-    return lines
 
 
 def _prose_lines(paragraphs: list[str]) -> list[str]:
@@ -223,7 +164,7 @@ def _report_lines(summary: report_core.ReportSummary) -> list[str]:
     """
     lines: list[str] = []
     for table in summary.tables:
-        lines.extend(_table_lines(table))
+        lines.extend(table_lines(table))
 
     if summary.meter_check is not None:
         lines.extend(_meter_lines(summary.meter_check))
@@ -243,6 +184,9 @@ def _report_lines(summary: report_core.ReportSummary) -> list[str]:
         return [*lines, "", f"No verdict yet: {summary.not_ready_reason}"]
 
     result = summary.verdict
+    # read_report's invariant: a summary with no not_ready_reason always carries a
+    # verdict, and the early return above covers every not-ready case.
+    assert result is not None
     lines.extend(["", f"=== Verdict: {result.outcome} ==="])
     lines.extend(_prose_lines(verdict.explain(result, minimum=summary.minimum_check)))
     lines.extend(_question_blocks(result))
@@ -251,7 +195,7 @@ def _report_lines(summary: report_core.ReportSummary) -> list[str]:
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
-def cli() -> None:
+def multi_cluster_billing() -> None:
     """Find out what a Snowflake warehouse's extra clusters actually cost.
 
     \b
@@ -263,9 +207,9 @@ def cli() -> None:
 
     \b
     Typical flow:
-        multi-cluster-billing run      # drive the warehouses, write a manifest
-        multi-cluster-billing report   # read the bill back (retry until it lands)
-        multi-cluster-billing cleanup  # drop the test warehouses
+        keebo-experiments multi-cluster-billing run      # drive the warehouses, write a manifest
+        keebo-experiments multi-cluster-billing report   # read the bill back (retry until it lands)
+        keebo-experiments multi-cluster-billing cleanup  # drop the test warehouses
 
     Credentials: pass --connection NAME to use an entry from Snowflake's
     connections.toml, or set SNOWFLAKE_ACCOUNT / SNOWFLAKE_USER /
@@ -279,7 +223,7 @@ def cli() -> None:
     """
 
 
-@cli.command()
+@multi_cluster_billing.command()
 @click.option(
     "--replicates",
     default=queries.DEFAULT_REPLICATES,
@@ -303,7 +247,7 @@ def cli() -> None:
     help="Rows generated by each natural-scenario query. Raise it if the queries finish too fast to queue.",
 )
 @_MANIFEST_OPTION
-@_CONNECTION_OPTION
+@connection_option
 @click.option("--yes", is_flag=True, help="Skip the cost confirmation.")
 def run(
     replicates: int,
@@ -332,7 +276,7 @@ def run(
         manifest.save(record, token_path)
 
     try:
-        with _open(connection_name) as conn:
+        with open_connection(connection_name) as conn:
             run_record = scenarios.run_experiment(
                 conn,
                 replicates=replicates,
@@ -348,13 +292,15 @@ def run(
     ready_by = manifest.metering_ready_by(run_record)
     click.echo(f"\nManifest written to {token_path}")
     click.echo(f"Metering lands by {ready_by.isoformat()} at the latest, and often much sooner.")
-    click.echo("Run this whenever you like; it says what is still missing:  multi-cluster-billing report")
-    click.echo("When you're done:  multi-cluster-billing cleanup")
+    click.echo(
+        "Run this whenever you like; it says what is still missing:  keebo-experiments multi-cluster-billing report"
+    )
+    click.echo("When you're done:  keebo-experiments multi-cluster-billing cleanup")
 
 
-@cli.command()
+@multi_cluster_billing.command()
 @_MANIFEST_OPTION
-@_CONNECTION_OPTION
+@connection_option
 @click.option(
     "--out",
     "out_path",
@@ -368,7 +314,7 @@ def report(manifest_path: str | None, connection_name: str | None, out_path: str
     path = _resolve_manifest(manifest_path)
     try:
         run_record = manifest.load(path)
-        with _open(connection_name) as conn:
+        with open_connection(connection_name) as conn:
             summary = report_core.read_report(conn, run_record)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -393,9 +339,9 @@ def report(manifest_path: str | None, connection_name: str | None, out_path: str
     click.echo(f"\nReport written to {target}")
 
 
-@cli.command()
+@multi_cluster_billing.command()
 @_MANIFEST_OPTION
-@_CONNECTION_OPTION
+@connection_option
 @click.option("--yes", is_flag=True, help="Skip the confirmation.")
 def cleanup(manifest_path: str | None, connection_name: str | None, yes: bool) -> None:
     """Drop the warehouses this run created, and nothing else."""
@@ -408,11 +354,11 @@ def cleanup(manifest_path: str | None, connection_name: str | None, yes: bool) -
     if not yes:
         click.confirm(f"Drop {len(run_record.warehouses)} warehouse(s) from {path}?", abort=True)
     try:
-        with _open(connection_name) as conn:
+        with open_connection(connection_name) as conn:
             scenarios.drop_warehouses(conn, warehouses=run_record.warehouses, echo=click.echo)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
 
 
 if __name__ == "__main__":
-    cli()
+    multi_cluster_billing()

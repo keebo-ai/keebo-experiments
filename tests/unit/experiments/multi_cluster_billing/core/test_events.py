@@ -166,3 +166,11 @@ def test_parse_rows_survives_a_missing_event_state_column():
     columns = ["WAREHOUSE_NAME", "CLUSTER_NUMBER", "EVENT_NAME", "EVENT_REASON", "TIMESTAMP"]
     rows = [(WH, 1, "RESUME_CLUSTER", "MIN_CLUSTER_COUNT", at(0.0))]
     assert events.parse_rows(columns, rows)[0].state is None
+
+
+def test_parse_rows_rejects_a_view_missing_a_required_column():
+    # event_name feeds a non-optional field, so a view without it must fail
+    # clearly rather than flow None into every event's name.
+    columns = ["WAREHOUSE_NAME", "CLUSTER_NUMBER", "EVENT_REASON", "EVENT_STATE", "TIMESTAMP"]
+    with pytest.raises(ValueError, match="event_name"):
+        events.parse_rows(columns, [(WH, 1, "TEST", "COMPLETED", at(0.0))])
