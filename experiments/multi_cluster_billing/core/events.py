@@ -19,6 +19,7 @@ from experiments.multi_cluster_billing.core.queries import EVENT_PHASE_RANK, UNK
 
 RESUME_WAREHOUSE = "RESUME_WAREHOUSE"
 SUSPEND_WAREHOUSE = "SUSPEND_WAREHOUSE"
+ALTER_WAREHOUSE = "ALTER_WAREHOUSE"
 RESUME_CLUSTER = "RESUME_CLUSTER"
 SPINUP_CLUSTER = "SPINUP_CLUSTER"
 SUSPEND_CLUSTER = "SUSPEND_CLUSTER"
@@ -153,6 +154,31 @@ def _next_marker(events: list[Event], after: int) -> datetime | None:
     return None
 
 
+def _phase_boundary(events: list[Event], after: int) -> int:
+    """Index of the first transition that opens a new phase after ``after``.
+
+    A resize (``ALTER_WAREHOUSE``) or the suspend — whichever comes first. The
+    resume's own completion marker must fall before this, so a marker found past
+    it belongs to a later transition, not to the resume.
+    """
+    for position in range(after + 1, len(events)):
+        if events[position].name in (ALTER_WAREHOUSE, SUSPEND_WAREHOUSE):
+            return position
+    return len(events)
+
+
+def _marker_between(events: list[Event], after: int, before: int) -> datetime | None:
+    """Timestamp of the first completion marker strictly between two positions.
+
+    ``None`` when the interval holds none, so a missing resume-side marker is
+    reported rather than silently paired to a later transition's marker.
+    """
+    for event in events[after + 1 : before]:
+        if event.name == WAREHOUSE_CONSISTENT:
+            return event.at
+    return None
+
+
 def _cluster_start(events: list[Event], cluster: int) -> int | None:
     for name in CLUSTER_START_EVENTS:
         position = _first(events, name, cluster=cluster)
@@ -179,9 +205,13 @@ def derive(events: list[Event], warehouse: str, *, expected_clusters: int) -> Li
     if suspend_at is None:
         missing.append(f"no {SUSPEND_WAREHOUSE}")
     if resume_at is not None and suspend_at is not None:
-        started = _next_marker(ordered, resume_at)
+        # The resume's marker must fall before the next transition (a resize or
+        # the suspend); pairing to a later one silently bills a wrong duration.
+        started = _marker_between(ordered, resume_at, _phase_boundary(ordered, resume_at))
         ended = _next_marker(ordered, suspend_at)
-        if started is None or ended is None:
+        if started is None:
+            missing.append(f"no {WAREHOUSE_CONSISTENT} closing the resume")
+        elif ended is None:
             missing.append(f"no {WAREHOUSE_CONSISTENT} closing the warehouse interval")
         else:
             warehouse_started = started

@@ -138,6 +138,41 @@ def test_a_missing_suspend_leaves_warehouse_seconds_unknown():
     assert any("SUSPEND_WAREHOUSE" in complaint for complaint in result.missing)
 
 
+def test_a_missing_resume_marker_leaves_warehouse_seconds_unknown_k1():
+    # k=1: dropping the resume's marker used to pair the resume to the suspend's
+    # marker and silently bill 0 seconds. It must be reported instead.
+    rows = [
+        event("RESUME_WAREHOUSE", 0.0),
+        event("RESUME_CLUSTER", 0.0, cluster=1),
+        event("SUSPEND_WAREHOUSE", 90.0),
+        event("SUSPEND_CLUSTER", 90.0, cluster=1),
+        event("WAREHOUSE_CONSISTENT", 90.0),
+    ]
+    result = events.derive(rows, WH, expected_clusters=1)
+    assert result.warehouse_seconds is None
+    assert not result.complete
+    assert any("closing the resume" in complaint for complaint in result.missing)
+
+
+def test_a_missing_resume_marker_is_not_paired_to_a_later_resize_marker():
+    # k=2: the resume's marker is gone but the resize's and the suspend's survive.
+    # The old code paired the resume to the resize marker and billed suspend-resize.
+    rows = [e for e in cycle() if not (e.name == "WAREHOUSE_CONSISTENT" and e.at == at(0.0))]
+    result = events.derive(rows, WH, expected_clusters=2)
+    assert result.warehouse_seconds is None
+    assert not result.complete
+    assert any("closing the resume" in complaint for complaint in result.missing)
+
+
+def test_a_missing_resize_marker_stays_harmless():
+    # cycle() scales out at 75s; its resize marker is at 75s. Dropping only that
+    # one must leave the warehouse interval (resume 0 -> suspend 90) intact.
+    rows = [e for e in cycle() if not (e.name == "WAREHOUSE_CONSISTENT" and e.at == at(75.0))]
+    result = events.derive(rows, WH, expected_clusters=2)
+    assert result.warehouse_seconds == pytest.approx(90.0)
+    assert result.complete
+
+
 def test_other_warehouses_are_ignored():
     rows = [*cycle(), event("SUSPEND_CLUSTER", 5.0, cluster=1, warehouse="SOMETHING_ELSE")]
     result = events.derive(rows, WH, expected_clusters=2)

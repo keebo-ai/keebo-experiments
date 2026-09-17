@@ -122,45 +122,63 @@ def save(run: RunManifest, path: Path | str) -> Path:
 
 
 def load(path: Path | str) -> RunManifest:
-    """Read a manifest written by :func:`save`."""
-    raw = json.loads(Path(path).read_text())
-    version = raw.get("schema_version")
+    """Read a manifest written by :func:`save`.
+
+    A hand-picked ``--manifest`` can be wrong in ways the caller should see as a
+    clean error rather than a traceback: a path that does not exist, a file that
+    is not valid JSON, or one missing a required key. Each is normalised to
+    ``ValueError`` with a message that names the problem.
+    """
+    target = Path(path)
+    try:
+        text = target.read_text()
+    except OSError as error:
+        raise ValueError(f"cannot read manifest {target}: {error.strerror or error}") from error
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"manifest {target} is not valid JSON: {error}") from error
+
+    version = raw.get("schema_version") if isinstance(raw, dict) else None
     if version != SCHEMA_VERSION:
         raise ValueError(f"manifest schema version {version} is not supported (expected {SCHEMA_VERSION})")
-    return RunManifest(
-        schema_version=raw["schema_version"],
-        run_token=raw["run_token"],
-        account=raw["account"],
-        region=raw["region"],
-        snowflake_version=raw["snowflake_version"],
-        size=raw["size"],
-        resource_constraint=raw["resource_constraint"],
-        started_at=raw["started_at"],
-        ended_at=raw["ended_at"],
-        replicates=[
-            Replicate(
-                scenario=item["scenario"],
-                index=item["index"],
-                warehouse=item["warehouse"],
-                size=item["size"],
-                resource_constraint=item["resource_constraint"],
-                target_clusters=item["target_clusters"],
-                cycle_seconds=item["cycle_seconds"],
-                kind=item["kind"],
-                resumed_at=item["resumed_at"],
-                resume_confirmed_at=item["resume_confirmed_at"],
-                scaled_at=item["scaled_at"],
-                target_seen_at=item["target_seen_at"],
-                suspend_issued_at=item["suspend_issued_at"],
-                suspend_confirmed_at=item["suspend_confirmed_at"],
-                max_started_clusters=item["max_started_clusters"],
-                query_ids=list(item["query_ids"]),
-                polls=[Poll(**poll) for poll in item["polls"]],
-                error=item["error"],
-            )
-            for item in raw["replicates"]
-        ],
-    )
+    try:
+        return RunManifest(
+            schema_version=raw["schema_version"],
+            run_token=raw["run_token"],
+            account=raw["account"],
+            region=raw["region"],
+            snowflake_version=raw["snowflake_version"],
+            size=raw["size"],
+            resource_constraint=raw["resource_constraint"],
+            started_at=raw["started_at"],
+            ended_at=raw["ended_at"],
+            replicates=[
+                Replicate(
+                    scenario=item["scenario"],
+                    index=item["index"],
+                    warehouse=item["warehouse"],
+                    size=item["size"],
+                    resource_constraint=item["resource_constraint"],
+                    target_clusters=item["target_clusters"],
+                    cycle_seconds=item["cycle_seconds"],
+                    kind=item["kind"],
+                    resumed_at=item["resumed_at"],
+                    resume_confirmed_at=item["resume_confirmed_at"],
+                    scaled_at=item["scaled_at"],
+                    target_seen_at=item["target_seen_at"],
+                    suspend_issued_at=item["suspend_issued_at"],
+                    suspend_confirmed_at=item["suspend_confirmed_at"],
+                    max_started_clusters=item["max_started_clusters"],
+                    query_ids=list(item["query_ids"]),
+                    polls=[Poll(**poll) for poll in item["polls"]],
+                    error=item["error"],
+                )
+                for item in raw["replicates"]
+            ],
+        )
+    except KeyError as error:
+        raise ValueError(f"manifest {target} is missing the {error.args[0]!r} key") from error
 
 
 def latest_path(directory: Path | str = ".") -> Path | None:

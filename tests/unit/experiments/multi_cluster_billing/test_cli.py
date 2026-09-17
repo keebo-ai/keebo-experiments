@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -354,6 +355,37 @@ def test_a_report_with_no_verdict_yet_is_still_written(monkeypatch, runner):
 
         assert result.exit_code == 0, result.output
         assert "not due until 18:00" in Path("cluster-billing-run-20260813T140000.txt").read_text()
+
+
+def test_report_on_a_missing_manifest_fails_cleanly(monkeypatch, runner, tmp_path):
+    monkeypatch.setattr(cli, "open_connection", fake_open)
+    result = runner.invoke(cli.multi_cluster_billing, ["report", "--manifest", str(tmp_path / "nope.json")])
+
+    assert result.exit_code == 1
+    assert "Error:" in result.output and "nope.json" in result.output
+    assert not isinstance(result.exception, (FileNotFoundError, KeyError))
+
+
+def test_cleanup_on_a_missing_manifest_fails_cleanly(monkeypatch, runner, tmp_path):
+    monkeypatch.setattr(cli, "open_connection", fake_open)
+    result = runner.invoke(cli.multi_cluster_billing, ["cleanup", "--manifest", str(tmp_path / "nope.json"), "--yes"])
+
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+    assert not isinstance(result.exception, (FileNotFoundError, KeyError))
+
+
+def test_report_on_a_manifest_missing_a_key_fails_cleanly(monkeypatch, runner, tmp_path):
+    # A file that parses and carries the current schema version but is missing a
+    # required key must name the problem, not raise a bare KeyError.
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"schema_version": manifest.SCHEMA_VERSION}))
+    monkeypatch.setattr(cli, "open_connection", fake_open)
+    result = runner.invoke(cli.multi_cluster_billing, ["report", "--manifest", str(bad)])
+
+    assert result.exit_code == 1
+    assert "Error:" in result.output and "missing" in result.output.lower()
+    assert not isinstance(result.exception, KeyError)
 
 
 def test_the_no_file_flag_prints_without_writing(monkeypatch, runner):

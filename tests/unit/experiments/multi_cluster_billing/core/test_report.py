@@ -356,6 +356,41 @@ def test_a_dropped_replicate_still_within_the_lag_says_to_rerun_report():
     assert "repeat the experiment" not in remedy
 
 
+def test_a_dropped_replicate_past_the_worst_case_lag_says_to_repeat_the_experiment():
+    # Every cluster came up, but the closing event still is not in the view after
+    # the worst-case lag has passed — waiting will not help, so repeat the run.
+    run, events_rows, metering_rows = build()
+    victim = warehouse_of(queries.CONTROL.name, 2)
+    last_wc = max(r[5] for r in events_rows if r[0] == victim and r[2] == "WAREHOUSE_CONSISTENT")
+    truncated = [r for r in events_rows if not (r[0] == victim and r[2] == "WAREHOUSE_CONSISTENT" and r[5] == last_wc)]
+    summary = summarise(run, truncated, metering_rows)  # now = BASE + 30h, past ready_by
+
+    assert summary.verdict is not None
+    table = next(t for t in summary.tables if "dropped from the verdict" in t.title)
+    remedy = next(row[3] for row in table.rows if row[0] == queries.CONTROL.name and row[1] == 2)
+    assert "repeat the experiment" in remedy
+    assert "rerun `report`" not in remedy
+
+
+def test_a_replicate_missing_its_resume_marker_is_dropped_not_silently_mispriced():
+    # Dropping CONTROL rep 2's earliest WAREHOUSE_CONSISTENT once made derive pair
+    # the resume to a later marker (a 0-second warehouse) that slipped past the
+    # gate and flipped the verdict to NO_RULE_FITS. It must now be dropped and the
+    # verdict computed from the clean replicates.
+    run, events_rows, metering_rows = build()
+    victim = warehouse_of(queries.CONTROL.name, 2)
+    earliest_wc = min(r[5] for r in events_rows if r[0] == victim and r[2] == "WAREHOUSE_CONSISTENT")
+    truncated = [
+        r for r in events_rows if not (r[0] == victim and r[2] == "WAREHOUSE_CONSISTENT" and r[5] == earliest_wc)
+    ]
+    summary = summarise(run, truncated, metering_rows)
+
+    assert summary.verdict is not None
+    assert summary.verdict.outcome == OWN_MINUTE  # the silent flip is gone
+    table = next(t for t in summary.tables if "dropped from the verdict" in t.title)
+    assert any(row[0] == queries.CONTROL.name and row[1] == 2 for row in table.rows)
+
+
 def test_a_disagreement_between_the_event_log_and_the_poll_clock_is_flagged():
     run, events_rows, metering_rows = build()
     # A poll clock that says the warehouse ran ten minutes while its events say
