@@ -80,13 +80,25 @@ def run_concurrent(
     barrier = threading.Barrier(concurrency)
 
     def worker(index: int) -> QueryOutcome:
-        conn = connect()
+        conn = None
         try:
+            conn = connect()
             cursor = conn.cursor()
             for statement in setup:
                 cursor.execute(statement)
             # All sessions are open and set up; fire the queries together.
             barrier.wait()
+        except BaseException:
+            # A worker that fails before the barrier (failed connect or setup)
+            # would otherwise leave its peers blocked on ``barrier.wait()``
+            # forever — a deadlock that also strands the running warehouse.
+            # Aborting breaks the barrier so every waiter raises instead.
+            barrier.abort()
+            if conn is not None:
+                conn.close()
+            raise
+
+        try:
             released_at = time.perf_counter()
             error: str | None = None
             try:

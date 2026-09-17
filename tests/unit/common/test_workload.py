@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from common.workload import run_concurrent
@@ -43,3 +45,21 @@ def test_rejects_non_positive_concurrency(make_cursor, make_connection):
 
     with pytest.raises(ValueError, match="concurrency must be >= 1"):
         run_concurrent(connect, QUERY, concurrency=0)
+
+
+def test_one_failed_connect_does_not_deadlock_the_barrier(make_cursor, make_connection):
+    # One worker fails to connect before reaching the barrier. Its peers must
+    # not block on the barrier forever — the run raises promptly instead.
+    lock = threading.Lock()
+    calls = {"n": 0}
+
+    def connect():
+        with lock:
+            calls["n"] += 1
+            first = calls["n"] == 1
+        if first:
+            raise RuntimeError("connect boom")
+        return make_connection(make_cursor(fetch=[("ok",)]))
+
+    with pytest.raises((RuntimeError, threading.BrokenBarrierError)):
+        run_concurrent(connect, QUERY, concurrency=3)
