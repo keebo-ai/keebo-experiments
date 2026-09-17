@@ -21,11 +21,11 @@ CREDITS_PER_HOUR_BY_SIZE: dict[str, int] = {
     "MEDIUM": 4,
     "LARGE": 8,
     "XLARGE": 16,
-    "2XLARGE": 32,
-    "3XLARGE": 64,
-    "4XLARGE": 128,
-    "5XLARGE": 256,
-    "6XLARGE": 512,
+    "X2LARGE": 32,
+    "X3LARGE": 64,
+    "X4LARGE": 128,
+    "X5LARGE": 256,
+    "X6LARGE": 512,
 }
 
 _SECONDS_PER_HOUR = 3600
