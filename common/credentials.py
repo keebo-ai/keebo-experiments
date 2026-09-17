@@ -11,7 +11,8 @@ Snowflake's ``connections.toml`` wins; otherwise ``SNOWFLAKE_*`` env vars (from
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import functools
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
@@ -53,6 +54,20 @@ def resolve_credentials() -> sf.SnowflakeCredentials:
         role=env["role"],
         authenticator=authenticator,
     )
+
+
+def resolve_opener(connection_name: str | None) -> Callable[[], Any]:
+    """Resolve credentials once and return a factory that opens new connections.
+
+    For experiments that need several concurrent sessions: credentials are
+    resolved (and prompted for) a single time here, then the returned callable
+    opens a fresh connection per call — no re-prompting. MFA tokens are cached by
+    the connector, so repeated opens stay non-interactive.
+    """
+    if connection_name:
+        return functools.partial(sf.connect_named, connection_name)
+    creds = resolve_credentials()
+    return functools.partial(sf.connect, creds)
 
 
 @contextmanager

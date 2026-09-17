@@ -39,6 +39,11 @@ Every experiment is a subcommand of the single `keebo-experiments` CLI.
   credits back from `ACCOUNT_USAGE`, so you can plot your own sizing curve and
   find the cost sweet spot.
   Run: `poetry run keebo-experiments warehouse-sizing --help`.
+- [**multicluster-demo**](./experiments/multicluster_demo/) — **spends credits**:
+  runs the same batch of concurrent queries with one cluster vs many to show
+  multi-cluster scale-out cutting queue time and wall-clock. `run --estimate`
+  prints the cost first; the temporary warehouse is dropped automatically.
+  Run: `poetry run keebo-experiments multicluster-demo --help`.
 
 ## Repository layout
 
