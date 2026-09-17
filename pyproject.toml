@@ -19,9 +19,10 @@ Homepage = "https://keebo.ai"
 Blog = "https://keebo.ai/blog"
 Repository = "https://github.com/keebo-ai/keebo-experiments"
 
-# Each experiment exposes a console script so it runs as `poetry run <name>`.
+# One console script mounts every experiment as a subcommand (see common/cli.py):
+#   poetry run keebo-experiments <experiment> [options]
 [project.scripts]
-warehouse-sizing-benchmark = "experiments.warehouse_sizing_benchmark.cli:cli"
+keebo-experiments = "common.cli:cli"
 
 [tool.poetry]
 # Installable so the console scripts above are created. `common/` holds shared

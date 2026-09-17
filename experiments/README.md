@@ -11,10 +11,11 @@ copy-paste skeleton for a new experiment.
 - One importable package per experiment: `experiments/<short_name>/` (use
   underscores so it's a valid Python package).
 - Split the CLI from the logic: a thin `cli.py` (`click` commands) over a
-  `benchmark.py`/`core.py` domain layer that has no `click` dependency and takes
-  an open connection as an argument (so it stays testable).
-- Expose a console script in the root `pyproject.toml` under `[project.scripts]`
-  so the experiment runs as `poetry run <experiment-name>`.
+  `core/` domain layer that has no `click` dependency and takes an open
+  connection as an argument (so it stays testable).
+- Mount the experiment's command on the shared CLI in `common/cli.py`, so it
+  runs as `poetry run keebo-experiments <experiment> ...`. The single
+  `keebo-experiments` console script is the only one in `[project.scripts]`.
 - Every experiment includes its own `README.md` describing:
   - what it demonstrates,
   - the related blog post,
