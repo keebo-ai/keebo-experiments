@@ -168,6 +168,11 @@ def summarise(run, events_rows, metering_rows):
     return report.read_report(conn, run, now=BASE + timedelta(hours=30))
 
 
+def summarise_at(run, events_rows, metering_rows, moment):
+    conn = ScriptedConnection(ScriptedCursor(metering_rows, events_rows))
+    return report.read_report(conn, run, now=moment)
+
+
 def row_value(table, row, column):
     return row[table.columns.index(column)]
 
@@ -253,10 +258,13 @@ def test_metering_still_inside_its_lag_window_says_to_wait_rather_than_to_rerun(
 
 
 def test_missing_events_never_yield_a_verdict_on_partial_data():
+    # Every K5 replicate loses its fifth cluster's suspend, so the scenario is
+    # left with no usable replicate at all — the one case that still blocks.
     run, events_rows, metering_rows = build()
     truncated = [r for r in events_rows if r[2] != "SUSPEND_CLUSTER" or r[1] != 5]
     summary = summarise(run, truncated, metering_rows)
     assert summary.verdict is None
+    assert "no usable replicate" in summary.not_ready_reason
     assert "cluster 5" in summary.not_ready_reason
 
 
@@ -293,13 +301,59 @@ def test_a_cross_check_with_a_half_read_event_log_is_dropped_rather_than_priced(
     assert all(s.name != queries.NATURAL.name for s in summary.verdict.scenarios)
 
 
-def test_a_replicate_that_never_reached_its_clusters_is_excluded_and_named():
+def test_an_incomplete_replicate_is_dropped_and_named_but_the_verdict_still_stands():
+    # One K5 replicate's events are entirely absent, but the other three are
+    # clean, so the run is decided from them rather than blocked wholesale.
     run, events_rows, metering_rows = build()
     dropped = warehouse_of(queries.K5.name, 2)
     truncated = [r for r in events_rows if r[0] != dropped]
     summary = summarise(run, truncated, metering_rows)
-    assert summary.verdict is None
-    assert dropped in summary.not_ready_reason
+
+    assert summary.not_ready_reason is None
+    assert summary.verdict.outcome == OWN_MINUTE
+    # The dropped replicate is surfaced loudly in its own warning table, not
+    # silently omitted, and it is named with its scenario and index.
+    table = next(t for t in summary.tables if "dropped from the verdict" in t.title)
+    assert any(row[0] == queries.K5.name and row[1] == 2 for row in table.rows)
+    # And it is not among the replicates the verdict rested on.
+    k5 = next(s for s in summary.verdict.scenarios if s.name == queries.K5.name)
+    assert k5.n == 3
+
+
+def test_a_dropped_replicate_that_never_came_up_says_to_repeat_the_experiment():
+    # The poller saw only four of K5's five clusters and cluster 5 is missing
+    # from its events: a cluster that never came up. No wait on ACCOUNT_USAGE
+    # fixes that, so the remedy is to repeat the experiment.
+    run, events_rows, metering_rows = build()
+    victim = warehouse_of(queries.K5.name, 2)
+    for item in run.replicates:
+        if item.warehouse == victim:
+            item.max_started_clusters = 4
+    truncated = [r for r in events_rows if not (r[0] == victim and r[2] == "SUSPEND_CLUSTER" and r[1] == 5)]
+    summary = summarise(run, truncated, metering_rows)
+
+    assert summary.verdict is not None  # the other K5 replicates carry the scenario
+    table = next(t for t in summary.tables if "dropped from the verdict" in t.title)
+    remedy = next(row[3] for row in table.rows if row[0] == queries.K5.name and row[1] == 2)
+    assert "repeat the experiment" in remedy
+    assert "rerun `report`" not in remedy
+
+
+def test_a_dropped_replicate_still_within_the_lag_says_to_rerun_report():
+    # Every cluster came up (max_started == target), but the closing event is
+    # not in the view yet and we are still inside the documented lag, so the
+    # remedy is to rerun `report` rather than repeat the run.
+    run, events_rows, metering_rows = build()
+    victim = warehouse_of(queries.CONTROL.name, 2)
+    last_wc = max(r[5] for r in events_rows if r[0] == victim and r[2] == "WAREHOUSE_CONSISTENT")
+    truncated = [r for r in events_rows if not (r[0] == victim and r[2] == "WAREHOUSE_CONSISTENT" and r[5] == last_wc)]
+    summary = summarise_at(run, truncated, metering_rows, BASE + timedelta(minutes=1))
+
+    assert summary.verdict is not None
+    table = next(t for t in summary.tables if "dropped from the verdict" in t.title)
+    remedy = next(row[3] for row in table.rows if row[0] == queries.CONTROL.name and row[1] == 2)
+    assert "rerun `report`" in remedy
+    assert "repeat the experiment" not in remedy
 
 
 def test_a_disagreement_between_the_event_log_and_the_poll_clock_is_flagged():

@@ -199,18 +199,80 @@ def _missing_metering_reason(run: manifest.RunManifest, missing: list[str], mome
     )
 
 
-def _incomplete_events_reason(items: list[tuple[manifest.Replicate, events.Lifetimes]]) -> str:
-    """Name every replicate whose event log cannot be billed against, and why.
+def _incomplete_remedy(item: manifest.Replicate, run: manifest.RunManifest, moment: datetime) -> str:
+    """The remedy that actually applies to one replicate's incomplete event log.
 
-    Never a partial verdict: a replicate with a half-read event log has no
-    measured lifetime at all, and dropping it quietly would change which
-    scenarios the verdict rests on without saying so.
+    Two signals the code has and must not conflate: if the run's own polling saw
+    fewer clusters than the scenario targeted, the cluster never came up and
+    ACCOUNT_USAGE will never show it — rerunning `report` cannot help, so the run
+    must be repeated. Otherwise every cluster did start, so a missing event is the
+    view still catching up (rerun `report`) until its worst-case lag has passed,
+    after which it too means the run needs repeating.
     """
-    detail = "; ".join(f"{item.warehouse} ({', '.join(life.missing) or 'no events at all'})" for item, life in items)
+    if item.max_started_clusters < item.target_clusters:
+        return "a cluster never came up during the run, so its events will never arrive — repeat the experiment"
+    if moment < manifest.metering_ready_by(run):
+        return (
+            f"WAREHOUSE_EVENTS_HISTORY can still be catching up (it lags up to {queries.METERING_LAG_HOURS} "
+            "hours) — rerun `report` later"
+        )
     return (
-        f"WAREHOUSE_EVENTS_HISTORY is incomplete for {len(items)} replicate(s): {detail}. That view lags up to "
-        f"{queries.METERING_LAG_HOURS} hours like the metering one, so rerun `report` later; if the rows never "
-        "arrive, those replicates cannot be billed against and the run needs repeating."
+        f"its events never arrived by {manifest.metering_ready_by(run).isoformat()}, past the worst-case lag — "
+        "repeat the experiment"
+    )
+
+
+def _incomplete_detail(item: manifest.Replicate, life: events.Lifetimes) -> str:
+    """One replicate's warehouse name and what its event log was missing."""
+    return f"{item.warehouse} ({', '.join(life.missing) or 'no events at all'})"
+
+
+def _no_usable_replicate_reason(
+    blocking: list[tuple[manifest.Replicate, events.Lifetimes]],
+    run: manifest.RunManifest,
+    moment: datetime,
+) -> str:
+    """Why the run cannot be decided: a scenario every one of whose replicates is unusable.
+
+    Incomplete replicates are otherwise dropped and the verdict computed from the
+    complete ones; this fires only when a scenario is left with none, because a
+    scenario with no measured lifetime can decide nothing. Each culprit is named
+    with what it was missing and the remedy that applies to it.
+    """
+    scenarios = sorted({item.scenario for item, _ in blocking})
+    detail = "; ".join(
+        f"{_incomplete_detail(item, life)} — {_incomplete_remedy(item, run, moment)}" for item, life in blocking
+    )
+    return f"no usable replicate for {', '.join(scenarios)}, so no verdict can be reached from what ran: {detail}."
+
+
+def _dropped_table(
+    dropped: list[tuple[manifest.Replicate, events.Lifetimes]],
+    run: manifest.RunManifest,
+    moment: datetime,
+) -> ReportTable | None:
+    """Replicates left out of the verdict because their event log is incomplete.
+
+    Loud on purpose: dropping a replicate changes which measurements the verdict
+    rests on, so each is named with what it was missing and the remedy that
+    applies — never dropped silently.
+    """
+    if not dropped:
+        return None
+    rows: list[tuple[Any, ...]] = [
+        (
+            item.scenario,
+            item.index,
+            ", ".join(life.missing) or "no events at all",
+            _incomplete_remedy(item, run, moment),
+        )
+        for item, life in dropped
+    ]
+    return ReportTable(
+        step=5,
+        title="WARNING: replicates dropped from the verdict — incomplete event logs",
+        columns=["scenario", "rep", "missing", "remedy"],
+        rows=rows,
     )
 
 
@@ -251,7 +313,7 @@ def _disagreement_table(run: manifest.RunManifest, lifetimes: dict[str, events.L
     if not rows:
         return None
     return ReportTable(
-        step=5,
+        step=6,
         title="WARNING: event-derived and polled durations disagree — suspect a missed event, not a result",
         columns=["scenario", "rep", "event_warehouse_s", "polled_warehouse_s", "gap_s"],
         rows=rows,
@@ -330,9 +392,24 @@ def read_report(conn, run: manifest.RunManifest, *, now: datetime | None = None)
     }
     tables[1] = _replicate_table(run, lifetimes, {})
 
-    incomplete = [(item, lifetimes[item.warehouse]) for item in measured if not lifetimes[item.warehouse].complete]
-    if incomplete:
-        return ReportSummary(tables, None, None, None, _incomplete_events_reason(incomplete))
+    # Incomplete replicates are dropped from the verdict rather than fatal to it:
+    # each scenario decides from the replicates whose events are complete. Every
+    # drop is reported loudly (it changes which measurements the verdict rests on);
+    # only a scenario left with no complete replicate still blocks, since it can
+    # decide nothing.
+    dropped = [(item, lifetimes[item.warehouse]) for item in measured if not lifetimes[item.warehouse].complete]
+    dropped_table = _dropped_table(dropped, run, moment)
+    if dropped_table is not None:
+        tables.append(dropped_table)
+
+    undecidable = {
+        name
+        for name in measured_names
+        if run.for_scenario(name) and not any(lifetimes[item.warehouse].complete for item in run.for_scenario(name))
+    }
+    if undecidable:
+        blocking = [(item, life) for item, life in dropped if item.scenario in undecidable]
+        return ReportSummary(tables, None, None, None, _no_usable_replicate_reason(blocking, run, moment))
 
     try:
         published = queries.published_credits_per_hour(run.size, run.resource_constraint)
@@ -360,6 +437,7 @@ def read_report(conn, run: manifest.RunManifest, *, now: datetime | None = None)
         _observation(name, item, lifetimes[item.warehouse], billed_seconds[item.warehouse])
         for name in measured_names
         for item in run.for_scenario(name)
+        if lifetimes[item.warehouse].complete and item.warehouse in billed_seconds
     ]
     # The cross-check joins the report, and the verdict ignores it: it is here to
     # confirm the answer outside forced conditions, not to decide it. It is
@@ -387,7 +465,7 @@ def read_report(conn, run: manifest.RunManifest, *, now: datetime | None = None)
             cur.close()
         tables.append(
             ReportTable(
-                step=6,
+                step=7,
                 title="The natural scenario's queries — cluster_number should show the second on cluster 2",
                 columns=query_columns,
                 rows=query_rows,
