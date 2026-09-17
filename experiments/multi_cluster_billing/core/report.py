@@ -177,81 +177,62 @@ def _run_table(run: manifest.RunManifest) -> ReportTable:
     )
 
 
-def _missing_metering_reason(run: manifest.RunManifest, missing: list[str], moment: datetime) -> str:
-    """Explain an empty metering result, and say whether waiting is still the answer.
+@dataclass(frozen=True)
+class _Drop:
+    """A measured replicate left out of the verdict, and what it lacked.
 
-    The wait is only ever explained here, never enforced above: the rows are
-    asked for first, because Snowflake often publishes them long before the
-    documented worst case and a time-based gate would hide a finished result.
+    ``missing`` reads as a report cell: an event-log detail (from
+    :attr:`events.Lifetimes.missing`) when the events are incomplete, or
+    ``"no metering row"`` when the events are complete but the bill has not
+    landed. Both dimensions drop through the same path so they are reported and
+    gated identically.
     """
-    names = ", ".join(missing)
-    ready_by = manifest.metering_ready_by(run)
-    if moment < ready_by:
-        return (
-            f"no metering rows yet for {names}. A row appears only once its hour has closed, and ACCOUNT_USAGE "
-            f"can then lag up to {queries.METERING_LAG_HOURS} hours, so it will be there by "
-            f"{ready_by.isoformat()} at the latest — often much sooner. Rerun `report` to check."
-        )
-    return (
-        f"still no metering rows for {names}, and {ready_by.isoformat()} — the latest they were expected — has "
-        "passed. Either the view is lagging beyond its documented worst case, or these warehouses never billed "
-        "any compute; the step 2 table shows what each replicate did."
-    )
+
+    item: manifest.Replicate
+    missing: str
 
 
-def _incomplete_remedy(item: manifest.Replicate, run: manifest.RunManifest, moment: datetime) -> str:
-    """The remedy that actually applies to one replicate's incomplete event log.
+def _drop_remedy(item: manifest.Replicate, run: manifest.RunManifest, moment: datetime) -> str:
+    """The remedy that actually applies to one dropped replicate.
 
     Two signals the code has and must not conflate: if the run's own polling saw
     fewer clusters than the scenario targeted, the cluster never came up and
     ACCOUNT_USAGE will never show it — rerunning `report` cannot help, so the run
-    must be repeated. Otherwise every cluster did start, so a missing event is the
+    must be repeated. Otherwise the run itself was fine, so missing data is the
     view still catching up (rerun `report`) until its worst-case lag has passed,
-    after which it too means the run needs repeating.
+    after which it too means the run needs repeating. The same reasoning holds
+    whether the missing data is an event log or a metering row.
     """
     if item.max_started_clusters < item.target_clusters:
-        return "a cluster never came up during the run, so its events will never arrive — repeat the experiment"
+        return "a cluster never came up during the run, so ACCOUNT_USAGE will never show it — repeat the experiment"
     if moment < manifest.metering_ready_by(run):
         return (
-            f"WAREHOUSE_EVENTS_HISTORY can still be catching up (it lags up to {queries.METERING_LAG_HOURS} "
-            "hours) — rerun `report` later"
+            f"ACCOUNT_USAGE can still be catching up (it lags up to {queries.METERING_LAG_HOURS} hours) — "
+            "rerun `report` later"
         )
     return (
-        f"its events never arrived by {manifest.metering_ready_by(run).isoformat()}, past the worst-case lag — "
+        f"the data never arrived by {manifest.metering_ready_by(run).isoformat()}, past the worst-case lag — "
         "repeat the experiment"
     )
 
 
-def _incomplete_detail(item: manifest.Replicate, life: events.Lifetimes) -> str:
-    """One replicate's warehouse name and what its event log was missing."""
-    return f"{item.warehouse} ({', '.join(life.missing) or 'no events at all'})"
-
-
-def _no_usable_replicate_reason(
-    blocking: list[tuple[manifest.Replicate, events.Lifetimes]],
-    run: manifest.RunManifest,
-    moment: datetime,
-) -> str:
+def _no_usable_replicate_reason(blocking: list[_Drop], run: manifest.RunManifest, moment: datetime) -> str:
     """Why the run cannot be decided: a scenario every one of whose replicates is unusable.
 
-    Incomplete replicates are otherwise dropped and the verdict computed from the
-    complete ones; this fires only when a scenario is left with none, because a
-    scenario with no measured lifetime can decide nothing. Each culprit is named
+    Unusable replicates are otherwise dropped and the verdict computed from the
+    rest; this fires only when a scenario is left with none, because a scenario
+    with no measured lifetime and bill can decide nothing. Each culprit is named
     with what it was missing and the remedy that applies to it.
     """
-    scenarios = sorted({item.scenario for item, _ in blocking})
+    scenarios = sorted({drop.item.scenario for drop in blocking})
     detail = "; ".join(
-        f"{_incomplete_detail(item, life)} — {_incomplete_remedy(item, run, moment)}" for item, life in blocking
+        f"{drop.item.warehouse} ({drop.missing}) — {_drop_remedy(drop.item, run, moment)}" for drop in blocking
     )
     return f"no usable replicate for {', '.join(scenarios)}, so no verdict can be reached from what ran: {detail}."
 
 
-def _dropped_table(
-    dropped: list[tuple[manifest.Replicate, events.Lifetimes]],
-    run: manifest.RunManifest,
-    moment: datetime,
-) -> ReportTable | None:
-    """Replicates left out of the verdict because their event log is incomplete.
+def _dropped_table(dropped: list[_Drop], run: manifest.RunManifest, moment: datetime) -> ReportTable | None:
+    """Replicates left out of the verdict because their events or bill are incomplete.
 
     Loud on purpose: dropping a replicate changes which measurements the verdict
     rests on, so each is named with what it was missing and the remedy that
@@ -260,17 +241,11 @@ def _dropped_table(
     if not dropped:
         return None
     rows: list[tuple[Any, ...]] = [
-        (
-            item.scenario,
-            item.index,
-            ", ".join(life.missing) or "no events at all",
-            _incomplete_remedy(item, run, moment),
-        )
-        for item, life in dropped
+        (drop.item.scenario, drop.item.index, drop.missing, _drop_remedy(drop.item, run, moment)) for drop in dropped
     ]
     return ReportTable(
         step=5,
-        title="WARNING: replicates dropped from the verdict — incomplete event logs",
+        title="WARNING: replicates dropped from the verdict — incomplete events or missing metering",
         columns=["scenario", "rep", "missing", "remedy"],
         rows=rows,
     )
@@ -372,9 +347,6 @@ def read_report(conn, run: manifest.RunManifest, *, now: datetime | None = None)
         )
     )
     credits = {str(row[0]): float(row[1] or 0.0) for row in metering_rows}
-    absent = [item.warehouse for item in measured if item.warehouse not in credits]
-    if absent:
-        return ReportSummary(tables, None, None, None, _missing_metering_reason(run, absent, moment))
 
     event_columns, event_rows = _read(conn, run, queries.EVENTS_SQL)
     tables.append(
@@ -392,23 +364,32 @@ def read_report(conn, run: manifest.RunManifest, *, now: datetime | None = None)
     }
     tables[1] = _replicate_table(run, lifetimes, {})
 
-    # Incomplete replicates are dropped from the verdict rather than fatal to it:
-    # each scenario decides from the replicates whose events are complete. Every
-    # drop is reported loudly (it changes which measurements the verdict rests on);
-    # only a scenario left with no complete replicate still blocks, since it can
-    # decide nothing.
-    dropped = [(item, lifetimes[item.warehouse]) for item in measured if not lifetimes[item.warehouse].complete]
-    dropped_table = _dropped_table(dropped, run, moment)
+    # A replicate is usable only if BOTH its events are complete and its bill has
+    # landed. Either lack drops it from the verdict rather than blocking the run:
+    # each scenario decides from its usable replicates, and only a scenario left
+    # with none still blocks. Every drop is reported loudly (it changes which
+    # measurements the verdict rests on), naming which of the two it lacked.
+    def _usable(item: manifest.Replicate) -> bool:
+        return lifetimes[item.warehouse].complete and item.warehouse in credits
+
+    drops: list[_Drop] = []
+    for item in measured:
+        if _usable(item):
+            continue
+        life = lifetimes[item.warehouse]
+        missing = ", ".join(life.missing) or "no events at all" if not life.complete else "no metering row"
+        drops.append(_Drop(item, missing))
+    dropped_table = _dropped_table(drops, run, moment)
     if dropped_table is not None:
         tables.append(dropped_table)
 
     undecidable = {
         name
         for name in measured_names
-        if run.for_scenario(name) and not any(lifetimes[item.warehouse].complete for item in run.for_scenario(name))
+        if run.for_scenario(name) and not any(_usable(item) for item in run.for_scenario(name))
     }
     if undecidable:
-        blocking = [(item, life) for item, life in dropped if item.scenario in undecidable]
+        blocking = [drop for drop in drops if drop.item.scenario in undecidable]
         return ReportSummary(tables, None, None, None, _no_usable_replicate_reason(blocking, run, moment))
 
     try:

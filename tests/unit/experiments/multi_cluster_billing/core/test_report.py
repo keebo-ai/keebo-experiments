@@ -241,20 +241,60 @@ def test_the_minimum_premise_is_checked_and_reported():
     assert summary.minimum_check.mean_warehouse_seconds == pytest.approx(float(queries.SHORT.cycle_seconds), abs=0.5)
 
 
-def test_missing_metering_names_the_warehouses_and_says_when_to_retry():
+def test_a_replicate_missing_only_its_metering_row_is_dropped_and_named():
+    # CONTROL rep 2's events are complete but its bill never landed. It is dropped
+    # like an incomplete-events replicate, and the run is decided from the rest.
     run, events_rows, metering_rows = build()
-    summary = summarise(run, events_rows, metering_rows[:-2])
-    assert summary.verdict is None
-    assert queries.K5.name.upper() in summary.not_ready_reason
-    assert "metering" in summary.not_ready_reason.lower()
+    victim = warehouse_of(queries.CONTROL.name, 2)
+    kept = [row for row in metering_rows if row[0] != victim]
+    summary = summarise(run, events_rows, kept)
+
+    assert summary.not_ready_reason is None
+    assert summary.verdict.outcome == OWN_MINUTE
+    table = next(t for t in summary.tables if "dropped from the verdict" in t.title)
+    row = next(r for r in table.rows if r[0] == queries.CONTROL.name and r[1] == 2)
+    assert row[2] == "no metering row"
+    control = next(s for s in summary.verdict.scenarios if s.name == queries.CONTROL.name)
+    assert control.n == 3
 
 
-def test_metering_still_inside_its_lag_window_says_to_wait_rather_than_to_rerun():
+def test_a_scenario_with_no_metering_at_all_still_blocks():
+    # Every K5 replicate is missing its bill, so the scenario has nothing to
+    # decide from and the run blocks with the n=0 reason.
     run, events_rows, metering_rows = build()
-    conn = ScriptedConnection(ScriptedCursor(metering_rows[:-2], events_rows))
-    summary = report.read_report(conn, run, now=BASE + timedelta(minutes=1))
+    kept = [row for row in metering_rows if not row[0].startswith("KEEBO_MCB_K5_")]
+    summary = summarise(run, events_rows, kept)
+
     assert summary.verdict is None
-    assert "Rerun `report`" in summary.not_ready_reason
+    assert queries.K5.name in summary.not_ready_reason
+    assert "no metering row" in summary.not_ready_reason
+    assert "no usable replicate" in summary.not_ready_reason
+
+
+def test_a_metering_drop_past_the_lag_says_to_repeat_the_experiment():
+    # Two K5 replicates never got a bill; the other two carry the scenario, so the
+    # run is decided and the pair is dropped and named. Past the worst-case lag,
+    # waiting will not help.
+    run, events_rows, metering_rows = build()
+    summary = summarise(run, events_rows, metering_rows[:-2])  # now = BASE + 30h
+    assert summary.verdict.outcome == OWN_MINUTE
+    table = next(t for t in summary.tables if "dropped from the verdict" in t.title)
+    k5_drops = [row for row in table.rows if row[0] == queries.K5.name]
+    assert {row[1] for row in k5_drops} == {3, 4}
+    assert all(row[2] == "no metering row" for row in k5_drops)
+    assert all("repeat the experiment" in row[3] for row in k5_drops)
+    k5 = next(s for s in summary.verdict.scenarios if s.name == queries.K5.name)
+    assert k5.n == 2
+
+
+def test_a_metering_drop_within_the_lag_says_to_rerun_report():
+    run, events_rows, metering_rows = build()
+    summary = summarise_at(run, events_rows, metering_rows[:-2], BASE + timedelta(minutes=1))
+    assert summary.verdict is not None
+    table = next(t for t in summary.tables if "dropped from the verdict" in t.title)
+    k5_drops = [row for row in table.rows if row[0] == queries.K5.name and row[2] == "no metering row"]
+    assert k5_drops
+    assert all("rerun `report`" in row[3] for row in k5_drops)
 
 
 def test_missing_events_never_yield_a_verdict_on_partial_data():
