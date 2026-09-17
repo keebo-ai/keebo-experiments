@@ -8,7 +8,7 @@ from common.cli import cli
 
 
 def test_experiments_are_mounted():
-    assert set(cli.commands) == {"warehouse-sizing"}
+    assert set(cli.commands) == {"warehouse-sizing", "multi-cluster-billing"}
 
 
 def test_root_help_lists_experiments():
@@ -16,3 +16,4 @@ def test_root_help_lists_experiments():
 
     assert result.exit_code == 0
     assert "warehouse-sizing" in result.output
+    assert "multi-cluster-billing" in result.output
