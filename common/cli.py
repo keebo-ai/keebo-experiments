@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import click
 
+from experiments.multicluster_scaling.cli import multicluster_scaling
 from experiments.warehouse_sizing_benchmark.cli import warehouse_sizing
 
 
@@ -28,6 +29,7 @@ def cli() -> None:
 
 
 cli.add_command(warehouse_sizing, "warehouse-sizing")
+cli.add_command(multicluster_scaling, "multicluster-scaling")
 
 
 if __name__ == "__main__":
