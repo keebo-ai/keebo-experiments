@@ -304,9 +304,30 @@ def test_a_replicate_that_never_reached_its_clusters_is_excluded_and_named():
 
 def test_a_disagreement_between_the_event_log_and_the_poll_clock_is_flagged():
     run, events_rows, metering_rows = build()
-    run.replicates[0].suspend_issued_at = (
-        datetime.fromisoformat(run.replicates[0].resumed_at) + timedelta(seconds=600)
+    # A poll clock that says the warehouse ran ten minutes while its events say
+    # ~45 seconds is a missed event, not a result.
+    run.replicates[0].suspend_confirmed_at = (
+        datetime.fromisoformat(run.replicates[0].resume_confirmed_at) + timedelta(seconds=600)
     ).isoformat()
     summary = summarise(run, events_rows, metering_rows)
     warning = next(t for t in summary.tables if "disagree" in t.title)
     assert warning.rows
+
+
+def test_slow_resume_provisioning_is_not_mistaken_for_a_missed_event():
+    # The event markers say the warehouse ran its full nominal time, and the
+    # poll confirmations bracket those markers within a second — so nothing is
+    # wrong. But the RESUME command was issued 10 seconds before the warehouse
+    # actually came up (a cold provision). Comparing the command-issue clock to
+    # the event markers would show a 10-second gap and wrongly flag this
+    # correctly-measured replicate; comparing the poll confirmations does not.
+    run, events_rows, metering_rows = build()
+    item = run.replicates[0]
+    start = datetime.fromisoformat(item.resumed_at)
+    item.resumed_at = (start - timedelta(seconds=10)).isoformat()
+    item.resume_confirmed_at = (start + timedelta(seconds=1)).isoformat()
+    item.suspend_confirmed_at = (
+        datetime.fromisoformat(item.suspend_issued_at) + timedelta(seconds=1)
+    ).isoformat()
+    summary = summarise(run, events_rows, metering_rows)
+    assert not any("disagree" in table.title for table in summary.tables)

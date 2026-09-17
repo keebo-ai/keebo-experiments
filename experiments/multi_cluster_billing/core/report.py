@@ -109,8 +109,19 @@ def read_events(conn, run: manifest.RunManifest) -> tuple[list[str], list[tuple[
 
 
 def _polled_seconds(item: manifest.Replicate) -> float:
-    start = datetime.fromisoformat(item.resumed_at)
-    end = datetime.fromisoformat(item.suspend_issued_at)
+    """The warehouse's running time as the poll clock saw it.
+
+    Measured between the poll-observed confirmations — the first poll that saw
+    the warehouse STARTED and the first that saw it SUSPENDED — not between the
+    ALTER commands. Those confirmations are the poll-clock analogs of the two
+    WAREHOUSE_CONSISTENT markers the event-derived duration is measured across,
+    so the two track each other to within a poll interval. The command-issue
+    clock (``resumed_at`` / ``suspend_issued_at``) instead precedes each marker
+    by the resume-provisioning and suspend-drain latency, which would make a
+    slow resume look like a missed event.
+    """
+    start = datetime.fromisoformat(item.resume_confirmed_at)
+    end = datetime.fromisoformat(item.suspend_confirmed_at)
     return (end - start).total_seconds()
 
 
