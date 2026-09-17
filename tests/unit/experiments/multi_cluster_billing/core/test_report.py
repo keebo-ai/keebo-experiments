@@ -326,8 +326,6 @@ def test_slow_resume_provisioning_is_not_mistaken_for_a_missed_event():
     start = datetime.fromisoformat(item.resumed_at)
     item.resumed_at = (start - timedelta(seconds=10)).isoformat()
     item.resume_confirmed_at = (start + timedelta(seconds=1)).isoformat()
-    item.suspend_confirmed_at = (
-        datetime.fromisoformat(item.suspend_issued_at) + timedelta(seconds=1)
-    ).isoformat()
+    item.suspend_confirmed_at = (datetime.fromisoformat(item.suspend_issued_at) + timedelta(seconds=1)).isoformat()
     summary = summarise(run, events_rows, metering_rows)
     assert not any("disagree" in table.title for table in summary.tables)
