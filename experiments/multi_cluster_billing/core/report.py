@@ -56,9 +56,14 @@ def _quote_list(values: list[str]) -> str:
 
 
 def _window(run: manifest.RunManifest) -> tuple[str, str]:
-    """The run's span, padded by an hour on each side to cover bucket edges."""
+    """The run's span, padded by an hour on each side to cover bucket edges.
+
+    ``ended_at`` is ``None`` on a manifest from a run that crashed partway, and
+    `report` is built to read those and say what is still missing rather than
+    fail on them, so the run's start stands in for a missing end.
+    """
     start = datetime.fromisoformat(run.started_at).astimezone(UTC) - timedelta(hours=1)
-    end = datetime.fromisoformat(run.ended_at).astimezone(UTC) + timedelta(hours=1)
+    end = datetime.fromisoformat(run.ended_at or run.started_at).astimezone(UTC) + timedelta(hours=1)
     return start.isoformat(), end.isoformat()
 
 
