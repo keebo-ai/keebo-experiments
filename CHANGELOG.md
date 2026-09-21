@@ -1,3 +1,10 @@
+## v0.4.0 (2026-09-21)
+
+### Feat
+
+- add the multi-cluster billing test experiment (#12)
+- shared keebo-experiments CLI + warehouse-sizing conversion (#9)
+
 ## v0.3.1 (2026-09-17)
 
 ## v0.3.0 (2026-08-12)
