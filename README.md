@@ -39,6 +39,12 @@ Every experiment is a subcommand of the single `keebo-experiments` CLI.
   credits back from `ACCOUNT_USAGE`, so you can plot your own sizing curve and
   find the cost sweet spot.
   Run: `poetry run keebo-experiments warehouse-sizing --help`.
+- [**multi-cluster-billing**](./experiments/multi_cluster_billing/) — settles
+  whether Snowflake's 60-second billing minimum applies once per warehouse start
+  or once per cluster, by driving dedicated multi-cluster warehouses through
+  timed scale-out cycles and reading the bill back from `ACCOUNT_USAGE`. Requires
+  the Enterprise edition.
+  Run: `poetry run keebo-experiments multi-cluster-billing --help`.
 
 ## Repository layout
 
