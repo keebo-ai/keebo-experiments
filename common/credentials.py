@@ -60,14 +60,13 @@ def resolve_opener(connection_name: str | None) -> Callable[[], Any]:
     """Resolve credentials once and return a factory that opens new connections.
 
     For experiments that need several concurrent sessions: credentials are
-    resolved (and prompted for) a single time here, then the returned callable
-    opens a fresh connection per call — no re-prompting. MFA tokens are cached by
-    the connector, so repeated opens stay non-interactive.
+    resolved (and prompted for) a single time here, then each call of the
+    returned factory opens a fresh connection without prompting again. The
+    caller owns, and must close, every connection it opens.
     """
     if connection_name:
         return functools.partial(sf.connect_named, connection_name)
-    creds = resolve_credentials()
-    return functools.partial(sf.connect, creds)
+    return functools.partial(sf.connect, resolve_credentials())
 
 
 @contextmanager

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import click
 
-from experiments.multicluster_demo.cli import multicluster_demo
+from experiments.multi_cluster_billing.cli import multi_cluster_billing
 from experiments.warehouse_sizing_benchmark.cli import warehouse_sizing
 
 
@@ -29,7 +29,7 @@ def cli() -> None:
 
 
 cli.add_command(warehouse_sizing, "warehouse-sizing")
-cli.add_command(multicluster_demo, "multicluster-demo")
+cli.add_command(multi_cluster_billing, "multi-cluster-billing")
 
 
 if __name__ == "__main__":

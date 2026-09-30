@@ -39,11 +39,12 @@ Every experiment is a subcommand of the single `keebo-experiments` CLI.
   credits back from `ACCOUNT_USAGE`, so you can plot your own sizing curve and
   find the cost sweet spot.
   Run: `poetry run keebo-experiments warehouse-sizing --help`.
-- [**multicluster-demo**](./experiments/multicluster_demo/) — **spends credits**:
-  runs the same batch of concurrent queries with one cluster vs many to show
-  multi-cluster scale-out cutting queue time and wall-clock. `run --estimate`
-  prints the cost first; the temporary warehouse is dropped automatically.
-  Run: `poetry run keebo-experiments multicluster-demo --help`.
+- [**multi-cluster-billing**](./experiments/multi_cluster_billing/) — settles
+  whether Snowflake's 60-second billing minimum applies once per warehouse start
+  or once per cluster, by driving dedicated multi-cluster warehouses through
+  timed scale-out cycles and reading the bill back from `ACCOUNT_USAGE`. Requires
+  the Enterprise edition.
+  Run: `poetry run keebo-experiments multi-cluster-billing --help`.
 
 ## Repository layout
 
@@ -65,11 +66,29 @@ keebo-experiments/
 └── README.md
 ```
 
-## Adding an experiment
+## Contributing
 
-See [`experiments/README.md`](./experiments/README.md) and
-[CONTRIBUTING.md](./CONTRIBUTING.md). Keep dependencies in the root
-`pyproject.toml` so everything installs with a single `poetry install`.
+Contributions from the community are welcome, whether that's a bug report, an
+idea for an experiment, a fix, or a whole new experiment.
+
+- **Found a bug or an odd result?** [Open an issue](https://github.com/keebo-ai/keebo-experiments/issues)
+  with the command you ran and what you saw. Redact your account details first.
+- **Have an experiment idea?** Open an issue that describes the claim you want
+  to test and roughly what it would cost to run, so we can agree on scope before
+  you build it.
+- **Ready to code?** Fork the repo, branch from `main`, follow the recipe in
+  [CONTRIBUTING.md](./CONTRIBUTING.md), make sure the
+  [quality gate](#development) passes, and open a PR with a
+  [Conventional Commits](https://www.conventionalcommits.org/) title.
+
+**Using [Claude Code](https://claude.com/claude-code)?** The repo includes a
+[`CLAUDE.md`](./CLAUDE.md) with the project rules and an `/add-experiment` skill
+that scaffolds a new experiment the way CONTRIBUTING.md describes. Review what
+it generates and test it against your own account before you open the PR.
+
+Every experiment must be safe to run on someone else's account. It works on a
+dedicated warehouse, ships a `cleanup` command, and states its cost up front.
+See [CONTRIBUTING.md](./CONTRIBUTING.md#conventions-match-these) for the rest.
 
 ## Development
 
