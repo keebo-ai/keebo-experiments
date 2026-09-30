@@ -45,6 +45,12 @@ Every experiment is a subcommand of the single `keebo-experiments` CLI.
   timed scale-out cycles and reading the bill back from `ACCOUNT_USAGE`. Requires
   the Enterprise edition.
   Run: `poetry run keebo-experiments multi-cluster-billing --help`.
+- [**multicluster-scaling**](./experiments/multicluster_scaling/) — read-only:
+  reads your `ACCOUNT_USAGE` history to show how Snowflake's multi-cluster
+  auto-scaling actually behaved on your warehouses — peak clusters, how often
+  extra ones spun up, how long they lived, and how busy they were. Creates
+  nothing and runs no workload.
+  Run: `poetry run keebo-experiments multicluster-scaling --help`.
 
 ## Repository layout
 
