@@ -2,11 +2,16 @@
 
 The ``click``-aware layer on top of :mod:`common.snowflake` (which stays free of
 ``click``). Every experiment command uses these so credential handling — env,
-``connections.toml``, and interactive prompts — behaves identically everywhere.
+Snowflake's connection config, and interactive prompts — behaves identically
+everywhere.
 
-Resolution order matches CONTRIBUTING.md: a ``--connection NAME`` entry in
-Snowflake's ``connections.toml`` wins; otherwise ``SNOWFLAKE_*`` env vars (from
-``.env``) fill in, and anything still missing is prompted for.
+Resolution order matches CONTRIBUTING.md:
+
+1. ``--connection NAME``: that entry in Snowflake's config.
+2. ``SNOWFLAKE_*`` env vars (from ``.env``), when ``SNOWFLAKE_ACCOUNT`` is set:
+   a deliberate choice for this repo beats the machine-wide default.
+3. Snowflake's default connection, if one is set up (as the Snowflake CLI uses).
+4. Otherwise, prompts for whatever the environment doesn't supply.
 """
 
 from __future__ import annotations
@@ -29,9 +34,9 @@ connection_option = click.option(
     "connection_name",
     default=None,
     help=(
-        "Name of an entry in Snowflake's connections.toml to connect with. "
-        "If omitted, credentials come from SNOWFLAKE_* env / .env, prompting "
-        "for anything missing."
+        "Name of a connection in Snowflake's config (config.toml / connections.toml). "
+        "If omitted: SNOWFLAKE_* env / .env when SNOWFLAKE_ACCOUNT is set, else "
+        "your Snowflake default connection, else prompts."
     ),
 )
 
@@ -57,14 +62,27 @@ def resolve_credentials() -> sf.SnowflakeCredentials:
 
 @contextmanager
 def open_connection(connection_name: str | None) -> Iterator[Any]:
-    """Open a Snowflake connection as a context manager.
-
-    Uses the named ``connections.toml`` entry if given; otherwise resolves
-    credentials from the environment, prompting for anything missing.
-    """
-    if connection_name:
-        with sf.connection(connection_name=connection_name) as conn:
+    """Open a Snowflake connection as a context manager, resolving it in the order above."""
+    name = connection_name or _implicit_connection_name()
+    if name:
+        with sf.connection(connection_name=name) as conn:
             yield conn
     else:
         with sf.connection(creds=resolve_credentials()) as conn:
             yield conn
+
+
+def _implicit_connection_name() -> str | None:
+    """The default connection to use when no ``--connection`` was given, if any.
+
+    ``SNOWFLAKE_ACCOUNT`` in the environment means the user set up ``.env`` for
+    this repo, which wins over the machine-wide default.
+    """
+    if sf.env_credentials()["account"]:
+        return None
+    name = sf.default_connection_name()
+    if name:
+        click.echo(
+            f"Using your Snowflake default connection '{name}' (pass --connection NAME to choose another).", err=True
+        )
+    return name

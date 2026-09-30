@@ -37,8 +37,9 @@ Everything runs on a dedicated `SIZING_BENCHMARK_WH` and touches nothing else.
 
 Pick whichever fits — no secrets are passed as flags:
 
-**A named connection** from Snowflake's own `connections.toml` (the file the
-Snowflake CLI uses). If you already have one, just point at it:
+**A named connection** from Snowflake's own config (`config.toml` or
+`connections.toml`, the files the Snowflake CLI uses). If you already have one,
+just point at it:
 
 ```bash
 poetry run warehouse-sizing-benchmark run --connection mydemo
@@ -54,9 +55,15 @@ cp .env.example .env
 # SNOWFLAKE_AUTHENTICATOR=externalbrowser for SSO), and SNOWFLAKE_ROLE.
 ```
 
-**Prompts.** Anything not supplied by `--connection` or the environment is
-prompted for (the password with hidden input), so you can also just run a
-command and type the values when asked.
+**Your Snowflake default connection.** If you use the Snowflake CLI, you
+probably have one already: a `[connections.default]` entry in
+`~/.snowflake/config.toml` (or whatever `default_connection_name` points at).
+With no `--connection` and no `SNOWFLAKE_ACCOUNT` in the environment, the CLI
+uses it and says so.
+
+**Prompts.** Anything not supplied by `--connection`, the environment, or a
+default connection is prompted for (the password with hidden input), so you can
+also just run a command and type the values when asked.
 
 > **MFA / SSO token caching.** If your account uses MFA or external-browser
 > SSO, each command opens its own connection and would otherwise re-prompt. The
