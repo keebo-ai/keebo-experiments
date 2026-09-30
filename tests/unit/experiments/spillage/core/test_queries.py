@@ -96,3 +96,4 @@ def test_report_steps_filter_on_the_run_and_group_per_run():
         assert "query_tag LIKE 'spill:%'" in sql
         assert f"query_text ILIKE '{queries.WORKLOAD_PREFIX}%'" in sql
     assert "GROUP BY 1, 2, 3, 4" in filled[1]  # run, scenario, side, size
+    assert "HAVING COUNT(*) > 0" in filled[2]  # empty, not a row of NULLs, while metering lags

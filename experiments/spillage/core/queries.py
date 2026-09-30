@@ -275,6 +275,7 @@ SELECT SUM(credits_used)         AS total_billed_credits,
 FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
 WHERE warehouse_name = '{wh}'
   AND start_time > DATEADD('hour', -{hours}, CURRENT_TIMESTAMP())
+HAVING COUNT(*) > 0  -- no row (not a row of NULLs) until metering catches up
 """,
     ),
 ]
