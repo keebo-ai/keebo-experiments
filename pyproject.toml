@@ -35,7 +35,7 @@ packages = [
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.1"
 ruff = "^0.16"
-commitizen = "^4.18"
+commitizen = "^4.19"
 mockito = "^2.0"
 
 [tool.ruff]
