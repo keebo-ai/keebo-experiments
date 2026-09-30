@@ -12,6 +12,7 @@ any SQL. No ``click`` here.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from common.sql import validate_name
@@ -67,3 +68,16 @@ def drop(cur: Any, kind: str, name: str, *, comment: str) -> bool:
 def _check_kind(kind: str) -> None:
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}, got {kind!r}")
+
+
+def suspend_quietly(cur: Any, warehouse: str, echo: Callable[[str], None] | None = None) -> None:
+    """Suspend ``warehouse``, ignoring errors.
+
+    For ``finally`` blocks, where a failure (e.g. "already suspended") would
+    otherwise hide the real exception. A warehouse's AUTO_SUSPEND is the backstop.
+    """
+    try:
+        cur.execute(f"ALTER WAREHOUSE {validate_name(warehouse, 'warehouse')} SUSPEND")
+    except Exception as exc:  # best effort by design
+        if echo:
+            echo(f"  (couldn't suspend {warehouse}: {exc}; it auto-suspends when idle)")

@@ -67,3 +67,23 @@ def test_drop_refuses_someone_elses_object(make_cursor):
 def test_unknown_kind_is_rejected(make_cursor):
     with pytest.raises(ValueError, match="kind"):
         dedicated.find(make_cursor(), "TABLE", "T")
+
+
+def test_suspend_quietly_swallows_errors(make_cursor):
+    cursor = make_cursor()
+
+    def execute(sql, *args):
+        raise RuntimeError("Invalid state. Warehouse cannot be suspended.")
+
+    cursor.execute = execute
+    messages: list[str] = []
+
+    dedicated.suspend_quietly(cursor, "wh", messages.append)
+
+    assert "couldn't suspend wh" in messages[0]
+
+
+def test_suspend_quietly_suspends(make_cursor):
+    cursor = make_cursor()
+    dedicated.suspend_quietly(cursor, "my_wh")
+    assert cursor.executed == ["ALTER WAREHOUSE MY_WH SUSPEND"]

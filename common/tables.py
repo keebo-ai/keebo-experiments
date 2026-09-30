@@ -12,9 +12,13 @@ from typing import Any
 
 @dataclass(frozen=True)
 class ReportTable:
-    """One report section: a step number, a title, column names, and rows."""
+    """One report section: a step number, a title, column names, and rows.
 
-    step: int
+    ``step`` numbers sections that follow an article's steps; ``None`` means an
+    unnumbered section (e.g. live results printed while a run happens).
+    """
+
+    step: int | None
     title: str
     columns: list[str]
     rows: list[tuple[Any, ...]]
