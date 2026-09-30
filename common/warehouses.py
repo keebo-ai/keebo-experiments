@@ -11,6 +11,8 @@ from collections.abc import Mapping
 from typing import Any
 
 # Each entry: (ALTER WAREHOUSE keyword, name recorded in QUERY_HISTORY, Gen1 credits/hr).
+# warehouse-sizing sweeps every size listed here by default, and its report SQL
+# hard-codes these six rates, so adding a size means updating that report too.
 SIZES: list[tuple[str, str, int]] = [
     ("XSMALL", "X-Small", 1),
     ("SMALL", "Small", 2),

@@ -5,13 +5,16 @@ creates carries an owner comment, and nothing is resized, suspended, or dropped
 unless that comment is present. A same-named object without it belongs to
 someone else, and touching it raises ``ValueError`` instead.
 
-Functions take an open cursor. Names must already be validated with
-:func:`common.sql.validate_name` (upper case, one part). No ``click`` here.
+Functions take an open cursor and a name, which is checked with
+:func:`common.sql.validate_name` (upper-cased, one part) before it goes into
+any SQL. No ``click`` here.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from common.sql import validate_name
 
 KINDS = ("WAREHOUSE", "DATABASE")
 
@@ -24,6 +27,7 @@ def owner_comment(experiment: str) -> str:
 def find(cur: Any, kind: str, name: str) -> dict[str, Any] | None:
     """The ``SHOW <kind>S`` row for ``name`` (columns keyed by lower-case name), or ``None``."""
     _check_kind(kind)
+    name = validate_name(name, kind.lower())
     cur.execute(f"SHOW {kind}S LIKE '{name}'")
     columns = [column[0].lower() for column in cur.description]
     # LIKE treats "_" as a wildcard, so match the name exactly.
@@ -40,6 +44,7 @@ def claim(cur: Any, kind: str, name: str, *, comment: str) -> dict[str, Any] | N
     Raises ``ValueError`` if an object with that name exists but wasn't created
     by this experiment.
     """
+    name = validate_name(name, kind.lower())
     record = find(cur, kind, name)
     if record is not None and record.get("comment") != comment:
         noun = kind.lower()
@@ -52,6 +57,7 @@ def claim(cur: Any, kind: str, name: str, *, comment: str) -> dict[str, Any] | N
 
 def drop(cur: Any, kind: str, name: str, *, comment: str) -> bool:
     """Drop the object if this experiment owns it. Returns whether anything was dropped."""
+    name = validate_name(name, kind.lower())
     if claim(cur, kind, name, comment=comment) is None:
         return False
     cur.execute(f"DROP {kind} IF EXISTS {name}")
