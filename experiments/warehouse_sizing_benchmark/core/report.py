@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from common import warehouses
 from common.tables import ReportTable
 from experiments.warehouse_sizing_benchmark.core import infra, queries
 from experiments.warehouse_sizing_benchmark.core.sweep import SizeResult
@@ -161,10 +162,12 @@ def _calibration_hints(smaller: SizeResult, larger: SizeResult) -> list[str]:
         )
     if smaller.gb_spill_local is not None and not smaller.timed_out and not smaller.gb_spill_local:
         hints.append(
-            f"Note: the {smaller.label} didn't spill, so there's no spill to remove. Use a bigger --table "
-            "(e.g. SNOWFLAKE_SAMPLE_DATA.TPCH_SF1000.LINEITEM) or a smaller first --size."
+            f"Note: the {smaller.label} didn't spill, so there's no spill to remove. Use a smaller first --size, "
+            "or a bigger --table (e.g. SNOWFLAKE_SAMPLE_DATA.TPCH_SF1000.LINEITEM, if your role can read the "
+            "sample data)."
         )
-    if larger.gb_spill_local and not larger.timed_out:
+    # A little residual spill on the larger size still makes the point; flag it only when it's a real share.
+    if larger.gb_spill_local and not larger.timed_out and larger.gb_spill_local >= 0.25 * (smaller.gb_spill_local or 0):
         hints.append(
             f"Note: the {larger.label} spilled too, so the contrast is weaker. Pick a bigger second --size "
             "or a smaller --table."
@@ -179,7 +182,7 @@ def read_report(
     conn: Any,
     *,
     objects: infra.BenchmarkObjects,
-    hours: int = 6,
+    hours: int = 24,
     run_id: str | None = None,
 ) -> tuple[str | None, list[ReportTable]]:
     """Run each reporting query for one run on the benchmark warehouse (Steps 10-16).
@@ -195,7 +198,9 @@ def read_report(
     cur = conn.cursor()
     tables: list[ReportTable] = []
     try:
-        infra.require(cur, objects)
+        # Only the objects: the report reads ACCOUNT_USAGE, not the source table.
+        generation = infra.require_objects(cur, objects)
+        multiplier = warehouses.GEN2_MULTIPLIER if generation == "2" else 1
         cur.execute(f"USE WAREHOUSE {objects.warehouse}")
         if run_id is None:
             cur.execute(queries.LATEST_RUN_SQL.format(wh=objects.warehouse, hours=hours))
@@ -205,7 +210,7 @@ def read_report(
             return None, []
         tag = f"{queries.QUERY_TAG_PREFIX}:{run_id}:"
         for step, title, sql in queries.REPORT_STEPS:
-            cur.execute(sql.format(hours=hours, wh=objects.warehouse, tag=tag))
+            cur.execute(sql.format(hours=hours, wh=objects.warehouse, tag=tag, multiplier=multiplier))
             columns = [col[0] for col in cur.description]
             tables.append(ReportTable(step, title, columns, list(cur.fetchall())))
     finally:

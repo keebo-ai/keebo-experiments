@@ -53,7 +53,7 @@ def test_setup_generates_the_table_when_the_sample_data_is_unreadable(account):
 
     ctas = next(s for s in cursor.executed if s.strip().startswith("CREATE TABLE"))
     assert ctas.strip().startswith("CREATE TABLE SIZING_BENCHMARK_DB.PUBLIC.LINEITEM AS")
-    resize = "ALTER WAREHOUSE SIZING_BENCHMARK_WH SET WAREHOUSE_SIZE = XSMALL STATEMENT_TIMEOUT_IN_SECONDS = 1800"
+    resize = "ALTER WAREHOUSE SIZING_BENCHMARK_WH SET WAREHOUSE_SIZE = MEDIUM STATEMENT_TIMEOUT_IN_SECONDS = 450"
     assert cursor.executed.index(resize) < cursor.executed.index(ctas)
 
 
@@ -71,6 +71,44 @@ def test_setup_refuses_someone_elses_object(account, kind):
     with pytest.raises(ValueError, match=f"wasn't created by this experiment.*--{kind}"):
         infra.setup(conn, OBJECTS)
     assert not any(s.startswith(("CREATE", "ALTER WAREHOUSE", "DROP")) for s in cursor.executed)
+
+
+def test_a_taken_database_name_creates_nothing(account):
+    cursor, conn = account(warehouse_comment=None, database_comment="production")
+    with pytest.raises(ValueError, match="--database"):
+        infra.setup(conn, OBJECTS)
+    assert not any(s.startswith("CREATE") for s in cursor.executed)  # no half-created pair
+
+
+def test_generating_the_table_runs_on_a_medium_and_times_out_cleanly(account):
+    class _SnowflakeTimeout(Exception):
+        errno = 630
+
+    cursor, conn = account(sample_data=False)
+    real_execute = cursor.execute
+
+    def execute(sql, *args):
+        real_execute(sql, *args)
+        if sql.strip().startswith("CREATE TABLE"):
+            raise _SnowflakeTimeout("Statement reached its statement or warehouse timeout")
+        return cursor
+
+    cursor.execute = execute
+
+    with pytest.raises(ValueError, match="hit its 450s cap, so nothing was created"):
+        infra.setup(conn, OBJECTS)
+    sql = cursor.executed
+    ctas = next(i for i, s in enumerate(sql) if s.strip().startswith("CREATE TABLE"))
+    assert (
+        sql[ctas - 1]
+        == "ALTER WAREHOUSE SIZING_BENCHMARK_WH SET WAREHOUSE_SIZE = MEDIUM STATEMENT_TIMEOUT_IN_SECONDS = 450"
+    )
+    # Back to X-Small afterwards, and suspended, even though it failed.
+    assert (
+        sql[ctas + 1]
+        == "ALTER WAREHOUSE SIZING_BENCHMARK_WH SET WAREHOUSE_SIZE = XSMALL STATEMENT_TIMEOUT_IN_SECONDS = 1800"
+    )
+    assert sql[-1] == "ALTER WAREHOUSE SIZING_BENCHMARK_WH SUSPEND"
 
 
 def test_setup_refuses_a_generation_mismatch(account):

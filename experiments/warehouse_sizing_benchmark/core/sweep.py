@@ -184,7 +184,12 @@ def _run_size(
             cur.execute("ALTER SESSION UNSET QUERY_TAG")
 
             elapsed_ms = _lookup(
-                cur, queries.ELAPSED_SQL.format(database=objects.database), query_id, "elapsed_ms", sleep
+                cur,
+                queries.ELAPSED_SQL.format(database=objects.database),
+                query_id,
+                "elapsed_ms",
+                sleep=sleep,
+                on_error=lambda exc: echo(f"  (couldn't read Snowflake's elapsed time: {exc}; using the client's)"),
             )
             runtime = client_s if elapsed_ms is None else float(elapsed_ms) / 1000
             runtimes.append(round(runtime, 1))
@@ -212,7 +217,14 @@ def _run_size(
 
 def _read_spill(cur: Any, query_id: str, *, sleep: Callable[[float], None], echo: Echo) -> dict[str, Any]:
     """The cold run's spill from GET_QUERY_OPERATOR_STATS; empty if it can't be read."""
-    stats = _lookup_row(cur, queries.SPILL_SQL, query_id, ready="operators", sleep=sleep)
+    stats = _lookup_row(
+        cur,
+        queries.SPILL_SQL,
+        query_id,
+        ready="operators",
+        sleep=sleep,
+        on_error=lambda exc: echo(f"  (couldn't read spill: {exc})"),
+    )
     if stats is None:
         echo("  (spill not available yet — `warehouse-sizing report` reads it from ACCOUNT_USAGE later)")
         return {}
@@ -220,18 +232,35 @@ def _read_spill(cur: Any, query_id: str, *, sleep: Callable[[float], None], echo
     return stats
 
 
-def _lookup(cur: Any, sql: str, query_id: str, column: str, sleep: Callable[[float], None]) -> Any:
-    row = _lookup_row(cur, sql, query_id, ready=column, sleep=sleep)
+def _lookup(
+    cur: Any,
+    sql: str,
+    query_id: str,
+    column: str,
+    *,
+    sleep: Callable[[float], None],
+    on_error: Callable[[Exception], None],
+) -> Any:
+    row = _lookup_row(cur, sql, query_id, ready=column, sleep=sleep, on_error=on_error)
     return None if row is None else row[column]
 
 
 def _lookup_row(
-    cur: Any, sql: str, query_id: str, *, ready: str, sleep: Callable[[float], None], tries: int = 5, delay: float = 2.0
+    cur: Any,
+    sql: str,
+    query_id: str,
+    *,
+    ready: str,
+    sleep: Callable[[float], None],
+    on_error: Callable[[Exception], None],
+    tries: int = 3,
+    delay: float = 1.5,
 ) -> dict[str, Any] | None:
     """One stats row for ``query_id``, once ``ready`` is set, or ``None``.
 
     Never raises: by now the query has been paid for, so a failed lookup should
-    cost the results a number, not the whole sweep.
+    cost the results a number, not the whole sweep. The retries stay within the
+    per-query overhead the cost cap allows (queries.OVERHEAD_SECONDS_PER_QUERY).
     """
     try:
         for attempt in range(1, tries + 1):
@@ -243,8 +272,8 @@ def _lookup_row(
                 return row
             if attempt < tries:
                 sleep(delay)
-    except Exception:  # best effort by design
-        return None
+    except Exception as exc:  # best effort by design
+        on_error(exc)
     return None
 
 

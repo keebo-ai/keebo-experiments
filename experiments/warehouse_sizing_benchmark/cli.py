@@ -67,10 +67,10 @@ def warehouse_sizing() -> None:
     for.
 
     WARNING: this uses real compute. The full X-Small to 2X-Large sweep bills
-    about 1.3 credits against TPCH_SF100. Every run is capped at --max-credits
-    (default 3) by warehouse statement timeouts priced at the warehouse's
-    generation. setup costs about 0.02 credits, or at most 0.5 if it has to
-    generate the table.
+    about 1.3 credits against TPCH_SF100. Every run's compute credits are capped
+    at --max-credits (default 3), 60-second minimums included, by warehouse
+    statement timeouts priced at the warehouse's generation. setup costs about
+    0.02 credits, or at most 0.5 if it has to generate the table.
     """
 
 
@@ -123,7 +123,7 @@ def setup(warehouse_name: str, database: str, generation: str, connection_name: 
     default=queries.DEFAULT_MAX_CREDITS,
     show_default=True,
     type=click.FloatRange(min=0.05, max=50),
-    help="Hard cap on this run's compute credits, split evenly across its queries.",
+    help="Hard cap on this run's compute credits, 60-second minimums included.",
 )
 @_WAREHOUSE_OPTION
 @_DATABASE_OPTION
@@ -163,7 +163,7 @@ def run(
 @warehouse_sizing.command()
 @click.option(
     "--hours",
-    default=6,
+    default=24,
     show_default=True,
     type=click.IntRange(min=1),
     help="Lookback window for the ACCOUNT_USAGE queries.",
@@ -188,7 +188,13 @@ def report(hours: int, run_id: str | None, warehouse_name: str, database: str, c
     if reported is None:
         click.echo(f"No benchmark runs on {objects.warehouse} in the last {hours} hours yet (ACCOUNT_USAGE may lag).")
         return
-    click.echo(f"Run {reported}:")
+    if run_id is None:
+        click.echo(
+            f"Latest run ACCOUNT_USAGE has caught up with: {reported}. If that isn't the id `run` printed, "
+            "wait a few minutes and rerun, or pass --run-id."
+        )
+    else:
+        click.echo(f"Run {reported}:")
     for table in tables:
         echo_table(table)
 

@@ -36,8 +36,8 @@ def test_sweep_issues_the_articles_sql(account):
     assert "SET lineitem_table = 'SNOWFLAKE_SAMPLE_DATA.TPCH_SF100.LINEITEM'" in sql
     assert "USE WAREHOUSE SIZING_BENCHMARK_WH" in sql
     assert "ALTER SESSION SET USE_CACHED_RESULT = FALSE" in sql
-    # 3 credits minus the X-Small's 60s minimum, over 2 queries: 5370s each on a Gen1 X-Small.
-    assert "ALTER WAREHOUSE SIZING_BENCHMARK_WH SET WAREHOUSE_SIZE = XSMALL STATEMENT_TIMEOUT_IN_SECONDS = 5370" in sql
+    # The X-Small may bill 60s + (3 - 1/60 credits) x 3600, over 2 queries, less 10s each: 5390s.
+    assert "ALTER WAREHOUSE SIZING_BENCHMARK_WH SET WAREHOUSE_SIZE = XSMALL STATEMENT_TIMEOUT_IN_SECONDS = 5390" in sql
     assert "ALTER SESSION SET QUERY_TAG = 'wsbench:R1:XSMALL:1'" in sql
     assert "ALTER SESSION SET QUERY_TAG = 'wsbench:R1:XSMALL:2'" in sql
     assert sql.count(queries.BENCHMARK_QUERY) == 2
@@ -136,6 +136,25 @@ def test_other_errors_propagate_after_suspending_and_resetting(account):
     with pytest.raises(RuntimeError, match="boom"):
         _sweep(conn)
     assert cursor.executed[-1].endswith("SET WAREHOUSE_SIZE = XSMALL STATEMENT_TIMEOUT_IN_SECONDS = 1800")
+
+
+def test_a_failed_spill_lookup_says_why_and_keeps_the_run(account):
+    cursor, conn = account()
+    real_execute = cursor.execute
+
+    def execute(sql, *args):
+        real_execute(sql, *args)
+        if "GET_QUERY_OPERATOR_STATS" in sql:
+            raise RuntimeError("insufficient privileges")
+        return cursor
+
+    cursor.execute = execute
+    messages: list[str] = []
+
+    [result] = _sweep(conn, runs=1, echo=messages.append)
+
+    assert result.gb_spill_local is None and result.runtimes_s == (42.0,)
+    assert any("couldn't read spill: insufficient privileges" in m for m in messages)
 
 
 def test_sweep_needs_setup(account):

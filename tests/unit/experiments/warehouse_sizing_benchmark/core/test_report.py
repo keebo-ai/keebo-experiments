@@ -59,6 +59,14 @@ def test_summary_totals_credits_and_names_the_cheapest():
     assert lines[1] == "Cheapest per query: Medium (0.01000 credits)."
 
 
+def test_a_little_residual_spill_is_not_flagged():
+    # The live SF100 comparison: 22.8 GB on the X-Small, 1.5 GB on the Medium. Still a clear win.
+    lines = report.summary_lines(
+        [_size("XSMALL", "X-Small", 1.0, [111.4], 22.82), _size("MEDIUM", "Medium", 4.0, [14.2], 1.54)]
+    )
+    assert not any("spilled too" in line for line in lines)
+
+
 def test_summary_hints_when_the_comparison_misses():
     no_spill = _size("XSMALL", "X-Small", 1.0, [30.0], 0.0)
     also_spilled = _size("MEDIUM", "Medium", 4.0, [20.0], 5.0)
@@ -94,6 +102,16 @@ def test_read_report_can_pick_a_run(account):
 def test_read_report_with_no_runs_yet(account):
     _cursor, conn = account(latest_run=None)
     assert report.read_report(conn, objects=OBJECTS) == (None, [])
+
+
+def test_read_report_prices_gen2_and_needs_no_readable_table(account):
+    # The report only reads ACCOUNT_USAGE, so an unreadable share doesn't matter.
+    cursor, conn = account(generation="2", sample_data=False, generated_table=False)
+
+    _run_id, tables = report.read_report(conn, objects=OBJECTS)
+
+    assert len(tables) == 7
+    assert any("rate.cph * 1.35" in s for s in cursor.executed)
 
 
 def test_read_report_needs_setup(account):

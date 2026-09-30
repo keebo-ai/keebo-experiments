@@ -21,7 +21,10 @@ def test_report_steps_cover_10_through_16():
 
 
 def test_report_steps_filter_on_the_warehouse_and_one_run():
-    filled = [sql.format(hours=6, wh="SIZING_BENCHMARK_WH", tag="wsbench:R1:") for _, _, sql in queries.REPORT_STEPS]
+    filled = [
+        sql.format(hours=6, wh="SIZING_BENCHMARK_WH", tag="wsbench:R1:", multiplier=1)
+        for _, _, sql in queries.REPORT_STEPS
+    ]
     assert all("{" not in sql for sql in filled)
     assert all("warehouse_name = 'SIZING_BENCHMARK_WH'" in sql for sql in filled)
     for step, sql in zip([s for s, _, _ in queries.REPORT_STEPS], filled, strict=True):
@@ -31,16 +34,35 @@ def test_report_steps_filter_on_the_warehouse_and_one_run():
     assert "HAVING COUNT(*) > 0" in filled[5]  # step 15: no row of NULLs while metering lags
 
 
+def test_estimated_credit_steps_price_the_generation():
+    by_step = {step: sql for step, _, sql in queries.REPORT_STEPS}
+    for step in (12, 14):
+        assert "rate.cph * 1.35" in by_step[step].format(hours=6, wh="W", tag="t", multiplier=1.35)
+
+
+def test_latest_run_ignores_tags_from_before_run_ids():
+    sql = queries.LATEST_RUN_SQL.format(wh="SIZING_BENCHMARK_WH", hours=24)
+    # Old tags look like wsbench:XXLARGE:1, which would sort after any timestamp.
+    assert "REGEXP_LIKE(SPLIT_PART(query_tag, ':', 2), '[0-9]{8}-[0-9]{6}')" in sql
+
+
 def test_query_timeouts_reserve_the_minimums_then_split_the_rest():
     # X-Small + Medium, 1 run each, 3 credits: 5/60 credits of minimums reserved,
     # then 1.4583 credits per query.
+    # Each size may use the 60s it pays for anyway plus its share, less 10s per query for the lookups.
     timeouts = queries.query_timeouts(["XSMALL", "MEDIUM"], generation="1", runs=1, max_credits=3.0)
-    assert timeouts == {"XSMALL": 5250, "MEDIUM": 1312}
+    assert timeouts == {"XSMALL": 5300, "MEDIUM": 1362}
 
 
 def test_the_default_cap_fits_the_articles_full_sweep():
     timeouts = queries.query_timeouts(queries.SIZE_KEYWORDS, generation="1", runs=3, max_credits=3.0)
-    assert timeouts["XSMALL"] == 390 and timeouts["XXLARGE"] == 12
+    assert timeouts["XSMALL"] == 400 and timeouts["XXLARGE"] == 22
+
+
+def test_the_default_cap_fits_the_articles_full_sweep_on_gen2():
+    # Also what an account that doesn't report its generation gets.
+    timeouts = queries.query_timeouts(queries.SIZE_KEYWORDS, generation="2", runs=3, max_credits=3.0)
+    assert timeouts["XXLARGE"] == 17
 
 
 def test_query_timeouts_price_the_generation():
@@ -56,7 +78,7 @@ def test_query_timeouts_reject_a_cap_below_the_minimums():
 
 def test_query_timeouts_reject_a_cap_that_is_too_tight():
     with pytest.raises(ValueError, match="only"):
-        queries.query_timeouts(queries.SIZE_KEYWORDS, generation="1", runs=3, max_credits=1.2)
+        queries.query_timeouts(queries.SIZE_KEYWORDS, generation="1", runs=5, max_credits=1.1)
 
 
 def test_live_stats_read_spill_from_operator_stats_and_elapsed_from_history():

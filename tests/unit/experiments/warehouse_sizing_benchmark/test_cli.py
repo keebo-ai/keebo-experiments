@@ -94,7 +94,7 @@ def test_report_prints_every_step_of_the_latest_run(runner, account):
     _stub_connection(conn)
     result = _invoke(runner, "report")
     assert result.exit_code == 0, result.output
-    assert "Run 20260930-120000:" in result.output
+    assert "Latest run ACCOUNT_USAGE has caught up with: 20260930-120000." in result.output
     assert "Step 10." in result.output and "Step 16." in result.output
 
 

@@ -25,14 +25,20 @@ This uses **real compute** on **your** account. The full X-Small to 2X-Large
 sweep bills about **1.3 credits** against `TPCH_SF100`.
 
 - **Every `run` has a hard cost cap, `--max-credits`, which defaults to 3.** It
-  covers everything the run bills. Snowflake's 60-second minimum for each size
-  is reserved first, and the rest is split across the run's queries and
-  enforced as the warehouse's `STATEMENT_TIMEOUT_IN_SECONDS`, priced at the
-  warehouse's actual generation (Gen2 bills 1.35×). A query that hits the cap
-  is reported as a lower bound (`+`), not an error.
+  caps the compute credits the run bills, Snowflake's 60-second minimums
+  included. A size bills at least 60 seconds each time it resumes, so each size
+  is reserved that first. The rest is shared across the sizes, and each size's
+  queries may use its minimum plus its share, less 10 seconds per query for the
+  stats lookups around it. That becomes the warehouse's
+  `STATEMENT_TIMEOUT_IN_SECONDS`, priced at the warehouse's actual generation
+  (Gen2 bills 1.35×). A query that hits the cap is reported as a lower bound
+  (`+`), not an error. Cloud-services credits, normally waived under
+  Snowflake's 10% rule, aren't counted.
 - **`setup`** costs about 0.02 credits, just Snowflake's 60-second minimum on
-  an X-Small. If it has to generate the table instead (see below), that's
-  capped at 30 minutes: **at most 0.5 credits** on Gen1.
+  an X-Small. If it has to generate the table instead (see below), it does that
+  on a Medium capped at 7.5 minutes: **at most 0.5 credits** on Gen1. If it hits
+  the cap, nothing is created and `setup` says so. The generated table (roughly
+  15–25 GB) then bills normal storage until `cleanup`.
 - **`report`** runs its `ACCOUNT_USAGE` queries on the benchmark's X-Small:
   about 0.02 credits.
 
@@ -49,8 +55,8 @@ sweep bills about **1.3 credits** against `TPCH_SF100`.
   `TPCH_SF100`'s 600M rows. Transient means no Time Travel or Fail-safe
   storage charges.
 
-The only thing the benchmark reads from your account is the sample data, a
-read-only share. Change the names with `--warehouse` and `--database`, and pass
+Beyond its own objects, the benchmark only reads from your account: the sample
+data (a read-only share) and, for `report`, `ACCOUNT_USAGE`. Change the names with `--warehouse` and `--database`, and pass
 the same names to every command. `run` and `report` refuse to start unless both
 objects exist and carry that comment; they point you back to `setup`. If an
 object with one of those names already exists but wasn't created by the
@@ -157,10 +163,12 @@ prints what the whole run cost and the cheapest size per query.
 - `run --max-credits 3` — the run's hard cost cap (0.05–50).
 - `setup --generation 2` — pin Gen2 instead of Gen1. The cap and the live
   credits use the Gen2 rate. Gen2 isn't available in every cloud region; there,
-  Snowflake rejects `setup` and Gen1 (the default) works. The report's
-  estimated-credit steps (12 and 14) use Gen1 rates.
-- `report --run-id 20260930-120000` — report an earlier run (`run` prints its
-  id); the default is the latest. `report --hours 12` widens the lookback.
+  Snowflake rejects `setup` and Gen1 (the default) works. The report prices
+  its estimated-credit steps (12 and 14) at the warehouse's generation too.
+- `report --run-id 20260930-120000` — report a specific run (`run` prints its
+  id). By default `report` reads the latest run `ACCOUNT_USAGE` has caught up
+  with, and says so; right after a run that can still be the previous one.
+  `report --hours 48` widens the lookback (default 24).
 - `--warehouse MY_WH --database MY_DB` — use different names (on every
   command).
 - `--connection NAME` — connect via a `connections.toml` entry instead of env.
@@ -199,11 +207,12 @@ Medium needed only 10. On a warehouse that's already running, as with any
 real workload, the per-query number is the one that adds up. That minimum is
 its own talking point about account costs.
 
-What we saw rehearsing it on a Gen1 account in AWS us-east-1:
+What we saw rehearsing it on a Gen1 account:
 
-- **Local spill is easy to show.** At around 500–600M groups (the default
-  `TPCH_SF100` is in that range), an X-Small spills tens of GB to local SSD and
-  a Medium spills nothing.
+- **Local spill is easy to show.** On the default `TPCH_SF100`, an X-Small
+  spills tens of GB to local SSD, and a Medium spills a small fraction of that
+  while running several times faster. For a cleaner contrast, try
+  `--size xsmall --size large`.
 - **Remote spill is hard to reach on an X-Small.** Its local SSD absorbed more
   than 200 GB from 6B groups, in a run of over 15 minutes, without spilling to
   remote storage. With `--table ...TPCH_SF1000.LINEITEM`, expect heavy local
