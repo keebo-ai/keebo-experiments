@@ -178,7 +178,7 @@ def <command>(connection_name: str | None) -> None:
 
 Then mount it on the shared CLI in `common/cli.py` (see step 2). Use a
 `@click.group()` instead of `@click.command()` if the experiment needs several
-subcommands (like `warehouse-sizing`'s `run` / `report` / `cleanup`).
+subcommands (like `warehouse-sizing`'s `setup` / `run` / `report` / `cleanup`).
 
 `tests/unit/experiments/<short_name>/test_<name>.py`:
 

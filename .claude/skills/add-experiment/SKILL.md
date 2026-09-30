@@ -19,7 +19,8 @@ Read these before you write anything:
   to a real warehouse unless the user asks.
 - One existing experiment end-to-end as a template. Pick the closest match:
   - `experiments/warehouse_sizing_benchmark/` is the reference implementation:
-    a parameter sweep plus an `ACCOUNT_USAGE` report.
+    idempotent `setup` / `cleanup` of its own guarded objects (`common/dedicated.py`),
+    a parameter sweep with a hard cost cap and live stats, plus an `ACCOUNT_USAGE` report.
   - `experiments/multi_cluster_billing/` is a long-running, manifest-tracked
     experiment with async queries.
 - The matching tests under `tests/unit/experiments/<name>/` and
