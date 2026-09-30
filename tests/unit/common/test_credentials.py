@@ -44,3 +44,34 @@ def test_resolve_credentials_skips_password_prompt_with_sso(monkeypatch):
     creds = credentials.resolve_credentials()
 
     assert creds == SnowflakeCredentials(account="acct", user="user", password=None, authenticator="externalbrowser")
+
+
+def test_resolve_opener_uses_named_connection_without_prompting(monkeypatch):
+    opened = []
+    monkeypatch.setattr(credentials.sf, "connect_named", lambda name: opened.append(name) or f"conn-{len(opened)}")
+
+    def _no_resolve():
+        raise AssertionError("should not resolve credentials for a named connection")
+
+    monkeypatch.setattr(credentials, "resolve_credentials", _no_resolve)
+
+    opener = credentials.resolve_opener("my_conn")
+
+    assert opener() == "conn-1"
+    assert opener() == "conn-2"
+    assert opened == ["my_conn", "my_conn"]
+
+
+def test_resolve_opener_resolves_credentials_once(monkeypatch):
+    creds = SnowflakeCredentials(account="acct", user="user", password="pw")
+    resolved = []
+    opened = []
+    monkeypatch.setattr(credentials, "resolve_credentials", lambda: resolved.append(1) or creds)
+    monkeypatch.setattr(credentials.sf, "connect", lambda c: opened.append(c) or object())
+
+    opener = credentials.resolve_opener(None)
+    first, second = opener(), opener()
+
+    assert first is not second
+    assert opened == [creds, creds]
+    assert resolved == [1]
