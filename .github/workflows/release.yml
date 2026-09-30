@@ -14,6 +14,9 @@ name: Release
 #   1. open-release-pr — runs on a non-bump push. Computes the bump locally,
 #      force-pushes a `release/auto` branch, and opens (or updates) a PR
 #      against main. That PR goes through review like any other change.
+#      Runs are serialized, a run whose push is no longer main's tip exits (a
+#      newer run decides), and when there's nothing to release any leftover
+#      release PR is closed as stale.
 #   2. tag-release — runs on every push to main. Idempotent: reads the
 #      version from pyproject.toml and creates the matching tag (+ GitHub
 #      Release) if it doesn't already exist. On the push that lands the bump
@@ -42,6 +45,13 @@ jobs:
     # Skip on the push that merges the release PR itself — its message
     # always starts with "bump:" because the PR title is "bump: version vX.Y.Z".
     if: ${{ !startsWith(github.event.head_commit.message, 'bump:') }}
+    # One release-PR run at a time. Overlapping runs once raced: a slower run
+    # opened a second "bump: version v0.4.0" PR (#23) seconds after the real one
+    # (#22) had merged. Queued runs wait instead of racing (a newer queued run
+    # replaces an older one that hasn't started).
+    concurrency:
+      group: open-release-pr
+      cancel-in-progress: false
 
     steps:
       - name: Check out
@@ -63,8 +73,7 @@ jobs:
           # success rather than failure so the workflow no-ops cleanly.
           no_raise: "21"
 
-      - name: Push release branch and open or update the PR
-        if: ${{ steps.bump.outputs.version }}
+      - name: Push release branch and open, update, or close the PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEW_VERSION: ${{ steps.bump.outputs.version }}
@@ -72,14 +81,32 @@ jobs:
           set -euo pipefail
           branch='release/auto'
 
+          # If main has moved on since this run was triggered, a newer run owns
+          # the release decision. Acting on this stale checkout could reopen a
+          # PR for a version that has already shipped.
+          git fetch --quiet origin main
+          if [ "$(git rev-parse origin/main)" != "${{ github.sha }}" ]; then
+            echo "main has moved past ${{ github.sha }}; leaving the release to the newer run."
+            exit 0
+          fi
+
+          open_pr=$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number // ""')
+
           # commitizen-action with `no_raise: 21` swallows the "nothing to bump"
-          # exit but still reports outputs.version as the CURRENT version, so the
-          # step's `if` guard passes even though no bump commit was created. In
-          # that case HEAD is still the triggering commit — nothing to release,
-          # so skip cleanly instead of force-pushing an empty release/auto and
-          # failing `gh pr create` with "No commits between main and release/auto".
-          if [ "$(git rev-parse HEAD)" = "${{ github.sha }}" ]; then
-            echo "commitizen made no bump commit (version v${NEW_VERSION} already released); nothing to open."
+          # exit but can still report outputs.version as the CURRENT version, so
+          # a version alone doesn't mean there's a bump. No bump commit means HEAD
+          # is still the triggering commit: nothing to release. Skip cleanly
+          # instead of force-pushing an empty release/auto and failing
+          # `gh pr create` with "No commits between main and release/auto".
+          if [ -z "${NEW_VERSION}" ] || [ "$(git rev-parse HEAD)" = "${{ github.sha }}" ]; then
+            echo "commitizen made no bump commit; nothing to release."
+            # With no unreleased feat/fix commits on main, any open release PR is
+            # stale (its version already shipped), so close it rather than let it
+            # sit and drift into conflicts.
+            if [ -n "$open_pr" ]; then
+              gh pr close "$open_pr" --delete-branch --comment \
+                "Closing: main has no unreleased feat/fix commits, so this release PR is stale. The release workflow opens a fresh one on the next releasable merge."
+            fi
             exit 0
           fi
 
@@ -96,9 +123,8 @@ jobs:
 
           # If a release PR is already open against this branch, update it in
           # place so the title and changelog reflect the latest bump.
-          existing=$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number // ""')
-          if [ -n "$existing" ]; then
-            gh pr edit "$existing" --title "$title" --body "$body"
+          if [ -n "$open_pr" ]; then
+            gh pr edit "$open_pr" --title "$title" --body "$body"
           else
             gh pr create --base main --head "$branch" --title "$title" --body "$body"
           fi
