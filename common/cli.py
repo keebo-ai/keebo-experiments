@@ -16,6 +16,7 @@ from __future__ import annotations
 import click
 
 from experiments.multi_cluster_billing.cli import multi_cluster_billing
+from experiments.spillage.cli import spillage
 from experiments.warehouse_sizing_benchmark.cli import warehouse_sizing
 
 
@@ -30,6 +31,7 @@ def cli() -> None:
 
 cli.add_command(warehouse_sizing, "warehouse-sizing")
 cli.add_command(multi_cluster_billing, "multi-cluster-billing")
+cli.add_command(spillage, "spillage")
 
 
 if __name__ == "__main__":

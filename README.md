@@ -45,6 +45,11 @@ Every experiment is a subcommand of the single `keebo-experiments` CLI.
   timed scale-out cycles and reading the bill back from `ACCOUNT_USAGE`. Requires
   the Enterprise edition.
   Run: `poetry run keebo-experiments multi-cluster-billing --help`.
+- [**spillage**](./experiments/spillage/) — runs the same spill-forcing
+  workload on an undersized and a right-sized warehouse and prints the runtime,
+  local/remote disk spill, and cost side by side, live. Two scenarios: `local`
+  (spill to local SSD) and `remote` (spill past local SSD to remote storage).
+  Run: `poetry run keebo-experiments spillage --help`.
 
 ## Repository layout
 
