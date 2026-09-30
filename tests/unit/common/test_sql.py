@@ -19,3 +19,13 @@ def test_validate_identifier_accepts_qualified_name():
 def test_validate_identifier_rejects_unsafe(bad):
     with pytest.raises(ValueError, match="warehouse must match"):
         sql.validate_identifier(bad, "warehouse")
+
+
+def test_validate_name_upper_cases_like_snowflake():
+    assert sql.validate_name("my_demo_wh", "warehouse") == "MY_DEMO_WH"
+
+
+@pytest.mark.parametrize("bad", ["DB.WH", "1WH", "wh-dash", "quote'name", "bad; DROP", ""])
+def test_validate_name_rejects_anything_but_one_plain_name(bad):
+    with pytest.raises(ValueError, match="warehouse must be a single unquoted name"):
+        sql.validate_name(bad, "warehouse")

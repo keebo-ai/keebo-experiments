@@ -41,3 +41,18 @@ def test_query_status_drains_then_reports_finished(make_cursor, make_connection)
     assert conn.is_still_running(conn.get_query_status(qid)) is True
     assert conn.is_still_running(conn.get_query_status(qid)) is False
     assert conn.is_still_running(conn.get_query_status(qid)) is False
+
+
+def test_route_answers_by_sql_and_falls_through(make_cursor):
+    def route(sql):
+        if sql.startswith("SHOW WAREHOUSES"):
+            return [("W", "mine")], [("name",), ("comment",)]
+        return None
+
+    cursor = make_cursor(route=route, fetch=[("default",)], description=[("col",)])
+
+    cursor.execute("SELECT 1")
+    assert cursor.fetchall() == [("default",)]
+    cursor.execute("SHOW WAREHOUSES LIKE 'W'")
+    assert cursor.fetchall() == [("W", "mine")]
+    assert [c[0] for c in cursor.description] == ["name", "comment"]
