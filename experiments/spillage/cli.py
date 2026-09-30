@@ -59,9 +59,9 @@ def spillage() -> None:
         keebo-experiments spillage cleanup                 # drop everything setup created
 
     Everything runs on a warehouse and database the demo creates and marks as
-    its own; it never touches an object it didn't create. It sorts Snowflake's
-    sample data (TPCH_SF10.LINEITEM), or a generated copy if the role can't
-    read it. The role needs
+    its own; it never touches an object it didn't create. It aggregates
+    Snowflake's sample data (TPCH_SF10.LINEITEM), or a generated copy if the
+    role can't read it. The role needs
     CREATE WAREHOUSE and CREATE DATABASE, plus ACCOUNT_USAGE access for report.
 
     Credentials: pass --connection NAME to use an entry from Snowflake's
@@ -111,7 +111,7 @@ def setup(warehouse: str, database: str, generation: str, connection_name: str |
     "--fanout",
     type=click.IntRange(min=1, max=100),
     default=None,
-    help="Sort N x 60M rows (local defaults to 8, remote to 40). Higher = more spill and cost.",
+    help="Aggregate N x 60M rows (local defaults to 8, remote to 40). Higher = more spill and cost.",
 )
 @click.option("--undersized", type=_SIZE_CHOICE, default=None, help="Override the undersized warehouse size.")
 @click.option("--right-sized", "right_sized", type=_SIZE_CHOICE, default=None, help="Override the right size.")

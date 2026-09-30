@@ -71,14 +71,16 @@ def test_run_issues_expected_sql(account):
     assert cursor.closed
 
 
-def test_run_sorts_the_generated_table_when_the_sample_is_unreadable(account):
+def test_run_reads_the_generated_table_when_the_sample_is_unreadable(account):
     cursor, conn = account(sample_data=False, generated_table=True)
     messages: list[str] = []
 
     _run(conn, echo=messages.append)
 
     assert cursor.executed.count(queries.build_workload(OBJECTS.generated_table, LOCAL.fanout)) == 2
-    assert any("Data: SPILLAGE_DEMO_DB.PUBLIC.LINEITEM, sorted 8x over (480,000,000 rows)" in m for m in messages)
+    assert any(
+        "Data: SPILLAGE_DEMO_DB.PUBLIC.LINEITEM, 8 copies of every row (480,000,000 groups)" in m for m in messages
+    )
 
 
 def test_query_tag_is_cleared_before_the_stats_lookup(account):

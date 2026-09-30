@@ -5,8 +5,8 @@ right-sized one, and watch what disk spill does to runtime and cost, live, on
 your own account.
 
 Built as a code-along for the Keebo spillage webinar. `setup` creates the
-demo's own warehouse and database. `run` sorts Snowflake's built-in sample data
-(TPC-H `LINEITEM`, 60M rows) on an X-Small, then on a Medium, and prints a
+demo's own warehouse and database. `run` aggregates Snowflake's built-in sample
+data (TPC-H `LINEITEM`, 60M rows) on an X-Small, then on a Medium, and prints a
 side-by-side comparison the moment it finishes.
 A hard cost cap (1.5 credits per run by default) keeps spending bounded.
 
@@ -30,15 +30,17 @@ Two scenarios, one command each:
 
 | Scenario | Undersized | Right-sized | Workload (default) | What you should see |
 | --- | --- | --- | --- | --- |
-| `local` | X-Small | Medium | sort of 480M rows (`--fanout 8`) | X-Small spills to local SSD; Medium doesn't |
-| `remote` | X-Small | Medium | sort of 2.4B rows (`--fanout 40`) | X-Small spills past local SSD to remote storage; Medium's spill stays local |
+| `local` | X-Small | Medium | 480M groups (`--fanout 8`) | X-Small spills to local SSD; Medium doesn't |
+| `remote` | X-Small | Medium | 2.4B groups (`--fanout 40`) | X-Small spills past local SSD to remote storage; Medium's spill stays local |
 
-The workload is one `ROW_NUMBER() OVER (ORDER BY ...)` with no `PARTITION BY`,
-which forces Snowflake to sort every row in a single window. It returns only
-`MAX(row_rank)`, so one row comes back but the sort can't be skipped. It
-runs over `SNOWFLAKE_SAMPLE_DATA.TPCH_SF10.LINEITEM`, or a generated copy of
-the same shape if your role can't read the sample data (see below).
-`--fanout N` sorts the 60M-row table N times over. It's the one setting that
+The workload is a `GROUP BY` on keys that are nearly unique per row, so there's
+one group per row and the hash table holds all of them. Snowflake splits the
+groups across the warehouse's nodes, so a bigger warehouse really has more
+memory for them. The query returns only `MAX(revenue)`, so one row comes back
+but every group still has to be built. It runs over
+`SNOWFLAKE_SAMPLE_DATA.TPCH_SF10.LINEITEM`, or a generated copy of the same
+shape if your role can't read the sample data (see below). `--fanout N`
+aggregates N copies of every row, which gives N × 60M groups. It's the one setting that
 sizes the demo. Both sizes in a scenario run the same query text, so any
 difference in runtime or spill comes from the warehouse size.
 
@@ -90,7 +92,7 @@ read-only share. It never writes to it.
 
 Change the names with `--warehouse` and `--database`, and pass the same names
 to every command. `run` and `report` refuse to start unless both objects exist
-and carry that comment, and there's a table to sort; they point you back to
+and carry that comment, and there's a table to read; they point you back to
 `setup`. If an
 object with one of those names already exists but wasn't created by the demo,
 every command stops with an error rather than resize, suspend, or drop it.
@@ -98,8 +100,8 @@ every command stops with an error rather than resize, suspend, or drop it.
 
 ### Calibrate before the webinar
 
-Medium has about 4× the memory and local SSD of an X-Small, so the sort has to
-be sized to land between them. The band is wide, but how much memory and SSD
+Medium has about 4× the memory and local SSD of an X-Small, so the workload has
+to be sized to land between them. The band is wide, but how much memory and SSD
 each size has varies by cloud and region. Treat the default fanouts as
 starting points and do one rehearsal run per scenario:
 
@@ -144,7 +146,7 @@ poetry run keebo-experiments spillage setup
 # 2. Local spill: X-Small vs Medium. The comparison prints as soon as it finishes.
 poetry run keebo-experiments spillage run --scenario local
 
-# 3. Local + remote spill: X-Small vs Medium on a much larger sort.
+# 3. Local + remote spill: X-Small vs Medium on a much larger aggregation.
 poetry run keebo-experiments spillage run --scenario remote
 
 # 4. (Optional, after a few minutes) runtime, spill, and billed credits from ACCOUNT_USAGE.
@@ -154,23 +156,28 @@ poetry run keebo-experiments spillage report
 poetry run keebo-experiments spillage cleanup
 ```
 
-`run` prints two tables. The numbers below only illustrate the layout:
+`run` prints two tables. This is a real `run --scenario local` at the defaults
+on a Gen1 account in AWS us-east-1. Your numbers will differ:
 
 ```
+Data: SNOWFLAKE_SAMPLE_DATA.TPCH_SF10.LINEITEM, 8 copies of every row (480,000,000 groups).
 Cost cap: at most 1.5 credits of Gen1 compute (X-Small stops after 45 min, Medium stops after 11 min).
 ...
 --- Step 1. Same workload, two warehouse sizes — Local spill ---
   side         size     credits_per_hr  runtime_s  spill_local_gb  spill_remote_gb  est_credits
-  undersized   X-Small  1               512.4      21.60           0.00             0.14233
-  right-sized  Medium   4               58.9       0.00            0.00             0.06544
+  undersized   X-Small  1               74.0       15.13           0.00             0.02054
+  right-sized  Medium   4               9.0        0.00            0.00             0.01002
 
 --- Step 2. The verdict (right-sized vs undersized) ---
   metric             undersized  right-sized  change
-  runtime (s)        512.4       58.9         8.7x faster
-  local spill (GB)   21.60       0.00         eliminated
+  runtime (s)        74.0        9.0          8.2x faster
+  local spill (GB)   15.13       0.00         eliminated
   remote spill (GB)  0.00        0.00         —
-  est. credits       0.14233     0.06544      54% cheaper
+  est. credits       0.02054     0.01002      51% cheaper
 ```
+
+The Medium costs 4× as much per hour but finishes 8× faster with no spill, so
+it costs half as much per query.
 
 ### How it's measured
 
@@ -192,7 +199,7 @@ Cost cap: at most 1.5 credits of Gen1 compute (X-Small stops after 45 min, Mediu
 
 - `run --max-credits 1.5` — the hard compute cap for the run, split between the
   two sizes (0.05–20).
-- `run --fanout N` — sort N × 60M rows (local defaults to 8, remote to 40, max
+- `run --fanout N` — aggregate N × 60M rows (local defaults to 8, remote to 40, max
   100). A higher N means more spill and a longer run, up to the cap.
 - `run --undersized SMALL --right-sized LARGE` — choose a different pair of
   sizes. The cap still applies, but a bigger size gets fewer minutes for the

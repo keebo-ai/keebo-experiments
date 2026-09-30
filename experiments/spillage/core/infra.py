@@ -5,7 +5,7 @@
 - a dedicated **warehouse** (X-Small, generation pinned, suspended when idle), and
 - a transient **database**, which gives the live-stats lookup a database to run
   in and, only if Snowflake's sample data isn't readable, holds a generated copy
-  of the 60M-row ``LINEITEM`` table the workload sorts,
+  of the 60M-row ``LINEITEM`` table the workload reads,
 
 each marked with :data:`queries.OWNER_COMMENT`. ``run`` and ``report`` refuse to
 start unless both exist and carry that mark, and ``cleanup`` drops exactly them.
@@ -52,7 +52,7 @@ class DemoObjects:
 
 @dataclass(frozen=True)
 class DemoState:
-    """What ``require`` found: the warehouse generation and the table to sort."""
+    """What ``require`` found: the warehouse generation and the table the workload reads."""
 
     generation: str  # '1' or '2'
     source_table: str
@@ -121,7 +121,7 @@ def setup(conn: Any, objects: DemoObjects, *, generation: str = "1", echo: Echo 
 
 
 def require(cur: Any, objects: DemoObjects, *, echo: Echo = _silent) -> DemoState:
-    """Check the demo objects exist and are ours; return the generation and the table to sort.
+    """Check the demo objects exist and are ours; return the generation and the table to read.
 
     A generation the account doesn't report is taken as '2', the pricier one,
     so the cost cap errs on the safe side (and ``echo`` says so).
@@ -135,7 +135,7 @@ def require(cur: Any, objects: DemoObjects, *, echo: Echo = _silent) -> DemoStat
     source_table = _source_table(cur, objects)
     if source_table is None:
         raise ValueError(
-            f"there's no table to sort: this role can't read {queries.SAMPLE_TABLE}, and "
+            f"there's no table to read: this role can't read {queries.SAMPLE_TABLE}, and "
             f"{objects.generated_table} doesn't exist (setup didn't finish). {not_set_up}"
         )
     generation = warehouses.generation_of(warehouse)

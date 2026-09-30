@@ -89,7 +89,7 @@ def run_comparison(
         echo(f"Scenario: {scenario.label} — {scenario.blurb}")
         echo(f"Run id: {run_id} (how `spillage report` labels this run)")
         rows = scenario.fanout * queries.SOURCE_ROWS
-        echo(f"Data: {state.source_table}, sorted {scenario.fanout}x over ({rows:,} rows).")
+        echo(f"Data: {state.source_table}, {scenario.fanout} copies of every row ({rows:,} groups).")
         caps = ", ".join(f"{warehouses.SIZE_LABEL[sizes[s]]} stops after {timeouts[s] / 60:.0f} min" for s in SIDES)
         echo(f"Cost cap: at most {max_credits:g} credits of Gen{generation} compute ({caps}).")
 

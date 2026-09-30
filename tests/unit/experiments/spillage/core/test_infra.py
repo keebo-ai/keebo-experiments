@@ -121,9 +121,9 @@ def test_require_assumes_gen2_when_the_account_does_not_say(account):
     assert "assume Gen2" in messages[0]
 
 
-def test_require_points_at_setup_when_there_is_no_table_to_sort(account):
+def test_require_points_at_setup_when_there_is_no_table_to_read(account):
     cursor, _conn = account(sample_data=False, generated_table=False)
-    with pytest.raises(ValueError, match="no table to sort.*setup didn't finish"):
+    with pytest.raises(ValueError, match="no table to read.*setup didn't finish"):
         infra.require(cursor, OBJECTS)
 
 

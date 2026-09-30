@@ -28,12 +28,12 @@ QUERY_TAG_PREFIX = "spill"
 # --------------------------------------------------------------------------- #
 # The source table
 #
-# The workload sorts Snowflake's own sample data, TPC-H LINEITEM at scale factor
+# The workload aggregates Snowflake's own sample data, TPC-H LINEITEM at scale factor
 # 10 (60M rows), which most accounts already have. Where the role can't read the
 # SNOWFLAKE_SAMPLE_DATA share (it can be dropped, or not granted), `setup`
 # generates a table of the same shape in the demo database instead: LINEITEM's
 # column names and 60M rows, every value a hash of the row number. Either way
-# the demo runs on any account, and fanout N sorts N x 60M rows.
+# the demo runs on any account, and fanout N aggregates N x 60M rows.
 # --------------------------------------------------------------------------- #
 SAMPLE_TABLE = "SNOWFLAKE_SAMPLE_DATA.TPCH_SF10.LINEITEM"
 GENERATED_TABLE = "PUBLIC.LINEITEM"  # inside the demo database; only if the sample isn't readable
@@ -97,7 +97,7 @@ def build_workload(table: str, fanout: int = 1) -> str:
 # Scenarios
 #
 # Both compare X-Small (1 credit/hr) with Medium (4 credits/hr). Medium has
-# roughly 4x the memory and local SSD, so there's a wide band of sort sizes that
+# roughly 4x the memory and local SSD, so there's a wide band of workload sizes that
 # spill on X-Small and not on Medium. The fanout defaults are starting points:
 # memory and local SSD per size vary by cloud and region, so calibrate once.
 # --------------------------------------------------------------------------- #
@@ -121,7 +121,7 @@ SCENARIOS: dict[str, Scenario] = {
         undersized="XSMALL",
         right_sized="MEDIUM",
         blurb=(
-            "The X-Small runs out of memory and spills the sort to local SSD; the Medium, "
+            "The X-Small runs out of memory and spills the aggregation to local SSD; the Medium, "
             "with 4x the memory, keeps it in memory. Same query, so the slowdown is the spill."
         ),
     ),
@@ -132,7 +132,7 @@ SCENARIOS: dict[str, Scenario] = {
         undersized="XSMALL",
         right_sized="MEDIUM",
         blurb=(
-            "A much larger sort overflows the X-Small's local SSD and spills to remote object "
+            "A much larger aggregation overflows the X-Small's local SSD and spills to remote object "
             "storage (the performance cliff). The Medium, with 4x the local SSD, keeps it local."
         ),
     ),
