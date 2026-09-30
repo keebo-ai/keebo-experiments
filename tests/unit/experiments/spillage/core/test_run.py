@@ -66,8 +66,8 @@ def test_run_issues_expected_sql(account):
     assert "ALTER SESSION SET QUERY_TAG = 'spill:R1:local:right_sized'" in sql
     assert sql.count(WORKLOAD) == 2  # identical query on both sizes
     assert sql.count("ALTER WAREHOUSE SPILLAGE_DEMO_WH SUSPEND") == 2
-    # Left at the cheapest size afterwards.
-    assert sql[-1] == "ALTER WAREHOUSE SPILLAGE_DEMO_WH SET WAREHOUSE_SIZE = XSMALL"
+    # Left at the cheapest size, with setup's timeout rather than the Medium's, for `report`.
+    assert sql[-1] == "ALTER WAREHOUSE SPILLAGE_DEMO_WH SET WAREHOUSE_SIZE = XSMALL STATEMENT_TIMEOUT_IN_SECONDS = 900"
     assert cursor.closed
 
 
@@ -171,7 +171,7 @@ def test_other_errors_propagate_after_suspending_and_resetting(account):
         _run(conn)
     assert cursor.executed[-2:] == [
         "ALTER WAREHOUSE SPILLAGE_DEMO_WH SUSPEND",
-        "ALTER WAREHOUSE SPILLAGE_DEMO_WH SET WAREHOUSE_SIZE = XSMALL",
+        "ALTER WAREHOUSE SPILLAGE_DEMO_WH SET WAREHOUSE_SIZE = XSMALL STATEMENT_TIMEOUT_IN_SECONDS = 900",
     ]
 
 
@@ -191,6 +191,12 @@ def test_a_failed_suspend_does_not_hide_the_real_error(account):
 
     with pytest.raises(RuntimeError, match="resource monitor"):
         _run(conn)
+
+
+def test_run_id_must_be_tag_safe(account):
+    _cursor, conn = account()
+    with pytest.raises(ValueError, match="run id"):
+        run.run_comparison(conn, objects=OBJECTS, scenario=LOCAL, run_id="bad'id")
 
 
 def test_unknown_size_is_rejected_before_anything_runs(account):

@@ -32,7 +32,7 @@ def test_fanout_must_be_positive(bad):
 
 def test_source_table_is_generated_not_borrowed():
     sql = queries.SOURCE_TABLE_SQL.format(table=TABLE, rows=queries.SOURCE_ROWS)
-    assert sql.strip().startswith(f"CREATE TABLE IF NOT EXISTS {TABLE} AS")
+    assert sql.strip().startswith(f"CREATE TABLE {TABLE} AS")
     assert "GENERATOR(ROWCOUNT => 60000000)" in sql
     assert "SNOWFLAKE_SAMPLE_DATA" not in sql
     for column in ("l_extendedprice", "l_discount", "l_shipdate", "l_orderkey", "l_partkey", "l_suppkey"):
@@ -49,6 +49,11 @@ def test_scenarios_compare_xsmall_with_medium():
 def test_resolve_scenario_applies_overrides():
     scenario = queries.resolve_scenario("LOCAL", fanout=2, undersized="small", right_sized="large")
     assert (scenario.name, scenario.fanout, scenario.undersized, scenario.right_sized) == ("local", 2, "SMALL", "LARGE")
+
+
+def test_resolve_scenario_requires_undersized_to_be_smaller():
+    with pytest.raises(ValueError, match="must be smaller"):
+        queries.resolve_scenario("local", undersized="large", right_sized="medium")
 
 
 def test_resolve_scenario_rejects_unknown_names():

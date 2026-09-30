@@ -28,7 +28,7 @@ QUERY_TAG_PREFIX = "spill"
 # --------------------------------------------------------------------------- #
 # The source table
 #
-# `setup` generates its own table instead of borrowing one, so the demo needs no
+# `setup` generates its own table (once) instead of borrowing one, so the demo needs no
 # sample-data share and behaves the same on every account. It has LINEITEM's
 # column names and 60M rows (the size of TPCH_SF10). Every value is a hash of the
 # row number, so the data is the same wherever it's generated.
@@ -37,7 +37,7 @@ SOURCE_TABLE = "PUBLIC.LINEITEM"  # inside the demo database
 SOURCE_ROWS = 60_000_000
 
 SOURCE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS {table} AS
+CREATE TABLE {table} AS
 SELECT seq                                                           AS l_orderkey,
        ABS(HASH(seq, 1)) % 2000000 + 1                               AS l_partkey,
        ABS(HASH(seq, 2)) % 100000 + 1                                AS l_suppkey,
@@ -144,12 +144,18 @@ def resolve_scenario(
     base = SCENARIOS.get(name.lower())
     if base is None:
         raise ValueError(f"unknown scenario {name!r}; choose one of: {', '.join(sorted(SCENARIOS))}")
-    return replace(
+    scenario = replace(
         base,
         fanout=fanout if fanout is not None else base.fanout,
         undersized=undersized.upper() if undersized else base.undersized,
         right_sized=right_sized.upper() if right_sized else base.right_sized,
     )
+    if warehouses.credits_per_hour(scenario.undersized) >= warehouses.credits_per_hour(scenario.right_sized):
+        raise ValueError(
+            f"the undersized warehouse ({scenario.undersized}) must be smaller than the right-sized one "
+            f"({scenario.right_sized})."
+        )
+    return scenario
 
 
 # --------------------------------------------------------------------------- #
@@ -215,7 +221,7 @@ REPORT_STEPS: list[tuple[int, str, str]] = [
         """
 SELECT SPLIT_PART(query_tag, ':', 2)                      AS run_id,
        SPLIT_PART(query_tag, ':', 3)                      AS scenario,
-       REPLACE(SPLIT_PART(query_tag, ':', 4), '_', '-')   AS warehouse,
+       REPLACE(SPLIT_PART(query_tag, ':', 4), '_', '-')   AS side,
        warehouse_size,
        ROUND(total_elapsed_time / 1000, 1)                AS runtime_s,
        ROUND(bytes_spilled_to_local_storage / POW(1024, 3), 2)  AS spill_local_gb,
@@ -235,7 +241,7 @@ ORDER BY start_time
         """
 SELECT SPLIT_PART(q.query_tag, ':', 2)                    AS run_id,
        SPLIT_PART(q.query_tag, ':', 3)                    AS scenario,
-       REPLACE(SPLIT_PART(q.query_tag, ':', 4), '_', '-') AS warehouse,
+       REPLACE(SPLIT_PART(q.query_tag, ':', 4), '_', '-') AS side,
        q.warehouse_size,
        ROUND(SUM(a.credits_attributed_compute), 5)        AS billed_credits
 FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_ATTRIBUTION_HISTORY a
@@ -250,7 +256,7 @@ ORDER BY 1, 2, 3
     ),
     (
         3,
-        "Everything the demo warehouse billed, setup included (WAREHOUSE_METERING_HISTORY)",
+        "Everything the demo warehouse billed, setup and report included (WAREHOUSE_METERING_HISTORY)",
         """
 SELECT SUM(credits_used)         AS total_billed_credits,
        SUM(credits_used_compute) AS compute_credits,

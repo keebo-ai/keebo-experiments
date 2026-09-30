@@ -54,8 +54,9 @@ credit/hour and Medium at 4; Gen2 bills 1.35× that.
   cancels anything that runs longer, so **setup plus both scenarios spend
   about 3.3 credits at most**. The only extras are a few seconds of stats
   lookups and Snowflake's 60-second minimum each time the warehouse resumes.
-- **`report`** runs three `ACCOUNT_USAGE` queries on the demo's X-Small,
-  usually for seconds.
+- **`report`** runs three `ACCOUNT_USAGE` queries on the demo's X-Small. They
+  take seconds, but resuming the warehouse bills Snowflake's 60-second minimum,
+  about 0.017 credits per `report`.
 
 A run that hits the cap isn't an error. It's reported with `+` on its numbers
 (for example `2700.0+` seconds and "at least 30.0x faster"), which is a fair
@@ -78,10 +79,11 @@ webinar you may want to show a run you recorded beforehand.
   charges.
 
 Change the names with `--warehouse` and `--database`, and pass the same names
-to every command. `run`, `report`, and `cleanup` refuse to start unless both
-objects exist and carry that comment. If an object with one of those names
-already exists but wasn't created by the demo, every command stops with an
-error rather than resize, suspend, or drop it. `cleanup` drops both objects.
+to every command. `run` and `report` refuse to start unless both objects, and
+the table, exist and carry that comment; they point you back to `setup`. If an
+object with one of those names already exists but wasn't created by the demo,
+every command stops with an error rather than resize, suspend, or drop it.
+`cleanup` drops the demo's objects and reports anything that wasn't there.
 
 ### Calibrate before the webinar
 
@@ -143,7 +145,7 @@ poetry run keebo-experiments spillage cleanup
 Cost cap: at most 1.5 credits of Gen1 compute (X-Small stops after 45 min, Medium stops after 11 min).
 ...
 --- Step 1. Same workload, two warehouse sizes — Local spill ---
-  warehouse    size     credits_per_hr  runtime_s  spill_local_gb  spill_remote_gb  est_credits
+  side         size     credits_per_hr  runtime_s  spill_local_gb  spill_remote_gb  est_credits
   undersized   X-Small  1               512.4      21.60           0.00             0.14233
   right-sized  Medium   4               58.9       0.00            0.00             0.06544
 
@@ -181,7 +183,8 @@ Cost cap: at most 1.5 credits of Gen1 compute (X-Small stops after 45 min, Mediu
   sizes. The cap still applies, but a bigger size gets fewer minutes for the
   same credits.
 - `setup --generation 2` — pin Gen2 instead of Gen1. The cap and the estimates
-  use the Gen2 rate.
+  use the Gen2 rate. Gen2 isn't available in every cloud region; there,
+  Snowflake rejects `setup` with an error, and Gen1 (the default) works.
 - `report --hours 48` — widen the `ACCOUNT_USAGE` lookback (default 24).
 - `--warehouse MY_WH --database MY_DB` — use different names (on every
   command).

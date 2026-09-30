@@ -21,7 +21,7 @@ def test_named_rejects_unsafe_names():
 
 
 def test_setup_creates_everything_on_a_fresh_account(account):
-    cursor, conn = account(warehouse_comment=None, database_comment=None)
+    cursor, conn = account(warehouse_comment=None, database_comment=None, table_exists=False)
     messages: list[str] = []
 
     infra.setup(conn, OBJECTS, echo=messages.append)
@@ -35,7 +35,8 @@ def test_setup_creates_everything_on_a_fresh_account(account):
     assert f"COMMENT = '{queries.OWNER_COMMENT}'" in create_wh
     create_db = next(s for s in sql if s.startswith("CREATE TRANSIENT DATABASE"))
     assert "DATA_RETENTION_TIME_IN_DAYS = 0" in create_db
-    assert any(s.strip().startswith("CREATE TABLE IF NOT EXISTS SPILLAGE_DEMO_DB.PUBLIC.LINEITEM AS") for s in sql)
+    assert "SHOW TABLES LIKE 'LINEITEM' IN SCHEMA SPILLAGE_DEMO_DB.PUBLIC" in sql
+    assert any(s.strip().startswith("CREATE TABLE SPILLAGE_DEMO_DB.PUBLIC.LINEITEM AS") for s in sql)
     # The table is generated on an X-Small with a timeout, then the warehouse is suspended.
     assert "ALTER WAREHOUSE SPILLAGE_DEMO_WH SET WAREHOUSE_SIZE = XSMALL STATEMENT_TIMEOUT_IN_SECONDS = 900" in sql
     assert sql[-1] == "ALTER WAREHOUSE SPILLAGE_DEMO_WH SUSPEND"
@@ -49,9 +50,17 @@ def test_setup_reuses_its_own_objects(account):
 
     infra.setup(conn, OBJECTS, echo=messages.append)
 
-    assert not any(s.startswith(("CREATE WAREHOUSE", "CREATE TRANSIENT DATABASE")) for s in cursor.executed)
+    assert not any(s.strip().startswith("CREATE") for s in cursor.executed)
     assert "Reusing warehouse SPILLAGE_DEMO_WH." in messages
     assert "Reusing database SPILLAGE_DEMO_DB." in messages
+    assert "Reusing table SPILLAGE_DEMO_DB.PUBLIC.LINEITEM." in messages
+
+
+def test_setup_regenerates_a_missing_table(account):
+    # The database exists but an earlier setup was interrupted before the table was built.
+    cursor, conn = account(table_exists=False)
+    infra.setup(conn, OBJECTS)
+    assert any(s.strip().startswith("CREATE TABLE SPILLAGE_DEMO_DB.PUBLIC.LINEITEM AS") for s in cursor.executed)
 
 
 @pytest.mark.parametrize("kind", ["warehouse", "database"])
@@ -94,7 +103,15 @@ def test_require_returns_the_generation(account):
 
 def test_require_assumes_gen2_when_the_account_does_not_say(account):
     cursor, _conn = account(generation=None)
-    assert infra.require(cursor, OBJECTS) == "2"  # the pricier rate keeps the cap safe
+    messages: list[str] = []
+    assert infra.require(cursor, OBJECTS, echo=messages.append) == "2"  # the pricier rate keeps the cap safe
+    assert "assume Gen2" in messages[0]
+
+
+def test_require_points_at_setup_when_the_table_is_missing(account):
+    cursor, _conn = account(table_exists=False)
+    with pytest.raises(ValueError, match="setup didn't finish"):
+        infra.require(cursor, OBJECTS)
 
 
 @pytest.mark.parametrize("missing", ["warehouse", "database"])

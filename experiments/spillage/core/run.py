@@ -12,6 +12,7 @@ reconciles against ``ACCOUNT_USAGE`` later for the exact billed credits.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -71,13 +72,15 @@ def run_comparison(
     as timed out rather than failing the comparison.
     """
     run_id = run_id or datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    if not re.fullmatch(r"[0-9A-Za-z-]+", run_id):
+        raise ValueError(f"run id must be letters, digits, and dashes, got {run_id!r}")
     sizes = {"undersized": scenario.undersized, "right_sized": scenario.right_sized}
     workload = queries.build_workload(objects.table, scenario.fanout)
 
     cur = conn.cursor()
     results: list[SideResult] = []
     try:
-        generation = infra.require(cur, objects)
+        generation = infra.require(cur, objects, echo=echo)
         timeouts = {
             side: queries.statement_timeout_s(size, generation=generation, max_credits=max_credits)
             for side, size in sizes.items()
@@ -108,7 +111,7 @@ def run_comparison(
                     )
                 )
         finally:
-            _reset_to_xsmall(cur, objects.warehouse)
+            _reset_for_idle(cur, objects.warehouse)
 
         for hint in calibration_hints(scenario, results):
             echo(f"\nNote: {hint}")
@@ -214,10 +217,13 @@ def _read_live_stats(
     return None
 
 
-def _reset_to_xsmall(cur: Any, warehouse: str) -> None:
-    """Leave the warehouse at the cheapest size for `report` and reruns. Best effort."""
+def _reset_for_idle(cur: Any, warehouse: str) -> None:
+    """Leave the warehouse X-Small with setup's timeout, ready for `report` and reruns. Best effort."""
     try:
-        cur.execute(f"ALTER WAREHOUSE {warehouse} SET WAREHOUSE_SIZE = XSMALL")
+        cur.execute(
+            f"ALTER WAREHOUSE {warehouse} SET WAREHOUSE_SIZE = XSMALL "
+            f"STATEMENT_TIMEOUT_IN_SECONDS = {queries.SETUP_TIMEOUT_SECONDS}"
+        )
     except Exception:  # never hide the exception that got us here
         pass
 

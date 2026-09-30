@@ -28,7 +28,7 @@ def test_comparison_shows_both_sides_and_a_verdict():
     side_by_side, verdict = report.comparison_tables(RESULTS, scenario=LOCAL)
 
     assert "Local spill" in side_by_side.title
-    assert side_by_side.columns[0] == "warehouse"
+    assert side_by_side.columns[0] == "side"
     assert [row[0] for row in side_by_side.rows] == ["undersized", "right-sized"]
     assert side_by_side.rows[0][4] == "12.00"
     assert verdict.columns == ["metric", "undersized", "right-sized", "change"]

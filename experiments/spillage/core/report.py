@@ -58,7 +58,7 @@ def comparison_tables(results: list[SideResult], *, scenario: queries.Scenario) 
         ReportTable(
             1,
             f"Same workload, two warehouse sizes — {scenario.label}",
-            ["warehouse", "size", "credits_per_hr", "runtime_s", "spill_local_gb", "spill_remote_gb", "est_credits"],
+            ["side", "size", "credits_per_hr", "runtime_s", "spill_local_gb", "spill_remote_gb", "est_credits"],
             [
                 (
                     side_label(r.side),

@@ -32,7 +32,7 @@ def _silent(_message: str) -> None:
 
 @dataclass(frozen=True)
 class DemoObjects:
-    """The names of the demo's warehouse and database (validated, upper-cased)."""
+    """The names of the demo's warehouse and database. Build it with :meth:`named`, which validates them."""
 
     warehouse: str
     database: str
@@ -82,7 +82,6 @@ def setup(conn: Any, objects: DemoObjects, *, generation: str = "1", echo: Echo 
         else:
             echo(f"Reusing database {objects.database}.")
 
-        echo(f"Generating {objects.table} ({queries.SOURCE_ROWS:,} rows; skipped if it already exists) ...")
         # X-Small, with its own timeout, caps what generating the table can cost.
         cur.execute(
             f"ALTER WAREHOUSE {objects.warehouse} SET WAREHOUSE_SIZE = XSMALL "
@@ -90,21 +89,25 @@ def setup(conn: Any, objects: DemoObjects, *, generation: str = "1", echo: Echo 
         )
         cur.execute(f"USE WAREHOUSE {objects.warehouse}")
         try:
-            cur.execute(queries.SOURCE_TABLE_SQL.format(table=objects.table, rows=queries.SOURCE_ROWS))
+            if table_exists(cur, objects):
+                echo(f"Reusing table {objects.table}.")
+            else:
+                echo(f"Generating {objects.table} ({queries.SOURCE_ROWS:,} rows, a minute or two) ...")
+                cur.execute(queries.SOURCE_TABLE_SQL.format(table=objects.table, rows=queries.SOURCE_ROWS))
             _check_account_usage(cur, echo)
         finally:
-            # Silent: on a rerun the table already exists and the warehouse may never have resumed.
+            # Silent: the warehouse may never have resumed if everything already existed.
             suspend_quietly(cur, objects.warehouse)
         echo("\nReady. Next:  keebo-experiments spillage run --scenario local")
     finally:
         cur.close()
 
 
-def require(cur: Any, objects: DemoObjects) -> str:
+def require(cur: Any, objects: DemoObjects, *, echo: Echo = _silent) -> str:
     """Check the demo objects exist and are ours; return the warehouse generation ('1' / '2').
 
     A generation the account doesn't report is taken as '2', the pricier one,
-    so the cost cap errs on the safe side.
+    so the cost cap errs on the safe side (and ``echo`` says so).
     """
     not_set_up = "Run `keebo-experiments spillage setup` first (with the same --warehouse / --database)."
     warehouse = dedicated.claim(cur, "WAREHOUSE", objects.warehouse, comment=queries.OWNER_COMMENT)
@@ -112,7 +115,21 @@ def require(cur: Any, objects: DemoObjects) -> str:
         raise ValueError(f"warehouse {objects.warehouse} doesn't exist. {not_set_up}")
     if dedicated.claim(cur, "DATABASE", objects.database, comment=queries.OWNER_COMMENT) is None:
         raise ValueError(f"database {objects.database} doesn't exist. {not_set_up}")
-    return warehouses.generation_of(warehouse) or "2"
+    if not table_exists(cur, objects):
+        raise ValueError(f"table {objects.table} doesn't exist (setup didn't finish). {not_set_up}")
+    generation = warehouses.generation_of(warehouse)
+    if generation is None:
+        echo(f"Note: {objects.warehouse} doesn't report its generation, so costs assume Gen2 (the pricier rate).")
+        return "2"
+    return generation
+
+
+def table_exists(cur: Any, objects: DemoObjects) -> bool:
+    """Whether the generated source table is there."""
+    schema, name = queries.SOURCE_TABLE.split(".")
+    cur.execute(f"SHOW TABLES LIKE '{name}' IN SCHEMA {objects.database}.{schema}")
+    columns = [column[0].lower() for column in cur.description]
+    return any(dict(zip(columns, row, strict=False)).get("name") == name for row in cur.fetchall())
 
 
 def cleanup(conn: Any, objects: DemoObjects, *, echo: Echo = _silent) -> None:

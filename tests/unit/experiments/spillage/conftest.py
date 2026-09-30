@@ -26,6 +26,7 @@ class FakeAccount:
     warehouse_comment: str | None = OURS
     database_comment: str | None = OURS
     generation: str | None = "1"
+    table_exists: bool = True
     # One (bytes_local, bytes_remote, elapsed_ms) row per lookup, or [] for "not there yet".
     live_stats: list[tuple[Any, ...]] = field(default_factory=lambda: [(3 * GB, 0, 42_000)])
     # Optional per-lookup answers (e.g. [[], [], [row]] = "arrives on the third try"),
@@ -41,6 +42,8 @@ class FakeAccount:
         if sql.startswith("SHOW DATABASES"):
             rows = [] if self.database_comment is None else [(OBJECTS.database, self.database_comment)]
             return rows, [("name",), ("comment",)]
+        if sql.startswith("SHOW TABLES"):
+            return ([("LINEITEM",)] if self.table_exists else []), [("name",)]
         if "QUERY_HISTORY_BY_SESSION" in sql:
             rows = self.live_stats_sequence.pop(0) if self.live_stats_sequence else self.live_stats
             return rows, [("BYTES_LOCAL",), ("BYTES_REMOTE",), ("ELAPSED_MS",)]

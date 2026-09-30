@@ -77,6 +77,23 @@ def test_run_prints_the_comparison(runner, account):
     assert "Step 2. The verdict" in result.output
 
 
+def test_run_on_gen2_shortens_the_caps(runner, account):
+    cursor, conn = account(generation="2")
+    _stub_connection(conn)
+
+    result = _invoke(runner, "run")
+
+    assert result.exit_code == 0, result.output
+    assert "credits of Gen2 compute" in result.output
+    # 0.75 credits at 1.35 and 5.4 credits/hr.
+    assert "ALTER WAREHOUSE SPILLAGE_DEMO_WH SET WAREHOUSE_SIZE = XSMALL STATEMENT_TIMEOUT_IN_SECONDS = 1999" in (
+        cursor.executed
+    )
+    assert "ALTER WAREHOUSE SPILLAGE_DEMO_WH SET WAREHOUSE_SIZE = MEDIUM STATEMENT_TIMEOUT_IN_SECONDS = 499" in (
+        cursor.executed
+    )
+
+
 def test_run_overrides_reach_the_warehouse(runner, account):
     cursor, conn = account()
     _stub_connection(conn)
