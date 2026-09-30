@@ -45,6 +45,12 @@ Every experiment is a subcommand of the single `keebo-experiments` CLI.
   timed scale-out cycles and reading the bill back from `ACCOUNT_USAGE`. Requires
   the Enterprise edition.
   Run: `poetry run keebo-experiments multi-cluster-billing --help`.
+- [**multicluster-demo**](./experiments/multicluster_demo/) — runs the same
+  batch of genuinely concurrent queries on a throwaway warehouse twice, capped
+  at one cluster and then allowed to scale out, and compares queue time and
+  wall-clock so you can see what multi-cluster buys you. Requires the
+  Enterprise edition.
+  Run: `poetry run keebo-experiments multicluster-demo --help`.
 
 ## Repository layout
 
@@ -52,9 +58,11 @@ Every experiment is a subcommand of the single `keebo-experiments` CLI.
 keebo-experiments/
 ├── common/        # shared machinery used by every experiment
 │   ├── cli.py         # the single `keebo-experiments` CLI (mounts each experiment)
+│   ├── cost.py        # pre-run credit estimates (no connection)
 │   ├── credentials.py # resolve creds + open a connection (env / connections.toml / prompt)
 │   ├── render.py      # print report tables
 │   ├── tables.py      # the ReportTable data type
+│   ├── workload.py    # drive N genuinely concurrent sessions against a warehouse
 │   └── snowflake.py   # Snowflake connection client (no click)
 ├── experiments/   # one importable package per experiment (see experiments/README.md)
 │   └── <name>/

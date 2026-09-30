@@ -40,3 +40,11 @@ def test_estimate_only_prints_cost_and_never_connects(runner, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "Estimated cost" in result.output
     assert calls["opener"] == 0
+
+
+def test_unknown_size_is_a_clean_error(runner):
+    result = runner.invoke(cli_module.multicluster_demo, ["run", "--size", "HUGE", "--estimate"])
+
+    assert result.exit_code != 0
+    assert "Unknown warehouse size" in result.output
+    assert not isinstance(result.exception, ValueError)

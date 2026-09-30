@@ -49,7 +49,8 @@ def multicluster_demo() -> None:
     several clusters (Snowflake spreads them out) — and compares queue time and
     total wall-clock.
 
-    WARNING: this uses real compute. See `run --estimate` for the projected cost.
+    WARNING: this uses real compute: roughly 0.1-0.3 credits at the defaults.
+    See `run --estimate` for the projected cost of your settings.
     The warehouse is dropped automatically when the run finishes.
     """
 
@@ -91,7 +92,10 @@ def run(
     connection_name: str | None,
 ) -> None:
     """Run the single-cluster vs multi-cluster comparison."""
-    projected = _estimate_credits(size, max_clusters)
+    try:
+        projected = _estimate_credits(size, max_clusters)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
     click.echo(
         f"Estimated cost: up to ~{projected:.2f} credits "
         f"({size.upper()}, {concurrency} concurrent queries, 2 rounds, up to {max_clusters} clusters)."

@@ -1,9 +1,17 @@
 # What multi-cluster does, and how you benefit
 
-**Cost: spends real credits.** This experiment creates a temporary XSMALL
-warehouse and runs real queries on it. The light defaults cost roughly **0.1–0.3
-credits**; run `... run --estimate` to see the projected cost before spending,
-and the warehouse is dropped automatically when the run finishes.
+## Before you run it
+
+- **It spends real credits.** It creates a dedicated, temporary XSMALL
+  warehouse (`KEEBO_MULTICLUSTER_DEMO_WH` by default) and runs real queries on
+  it. The defaults cost roughly **0.1–0.3 credits**. Run
+  `poetry run keebo-experiments multicluster-demo run --estimate` to see the
+  projected cost before spending anything.
+- **It cleans up after itself.** The warehouse is dropped automatically when the
+  run finishes, even on failure. If a run is interrupted, `cleanup` drops it.
+- **It needs the Enterprise edition** (multi-cluster warehouses) and a role
+  with `CREATE WAREHOUSE`. It reads `SNOWFLAKE_SAMPLE_DATA`, the free sample
+  share.
 
 ## What it demonstrates
 
