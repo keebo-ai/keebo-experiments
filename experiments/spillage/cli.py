@@ -52,14 +52,16 @@ def spillage() -> None:
 
     \b
     Typical flow:
-        keebo-experiments spillage setup                   # create the warehouse, database, and data
+        keebo-experiments spillage setup                   # create the warehouse and database
         keebo-experiments spillage run --scenario local    # results print live
         keebo-experiments spillage run --scenario remote
         keebo-experiments spillage report                  # exact billed credits (wait a few min)
         keebo-experiments spillage cleanup                 # drop everything setup created
 
     Everything runs on a warehouse and database the demo creates and marks as
-    its own; it never touches an object it didn't create. The role needs
+    its own; it never touches an object it didn't create. It sorts Snowflake's
+    sample data (TPCH_SF10.LINEITEM), or a generated copy if the role can't
+    read it. The role needs
     CREATE WAREHOUSE and CREATE DATABASE, plus ACCOUNT_USAGE access for report.
 
     Credentials: pass --connection NAME to use an entry from Snowflake's
@@ -68,7 +70,8 @@ def spillage() -> None:
     environment or a .env file (see .env.example). Anything missing is prompted
     for.
 
-    WARNING: this uses real compute. setup costs at most 0.25 credits (Gen1).
+    WARNING: this uses real compute. setup costs at most 0.25 credits (Gen1),
+    and about 0.02 when the sample data is readable.
     Each run is capped at --max-credits (default 1.5) by a warehouse statement
     timeout that accounts for the warehouse generation, so setup plus both
     scenarios spend about 3.3 credits at most.
@@ -87,7 +90,7 @@ def spillage() -> None:
 )
 @connection_option
 def setup(warehouse: str, database: str, generation: str, connection_name: str | None) -> None:
-    """Create the demo warehouse, database, and 60M-row source table. Safe to rerun."""
+    """Create the demo warehouse and database (and a 60M-row table if the sample data isn't readable)."""
     try:
         objects = infra.DemoObjects.named(warehouse, database)
         with open_connection(connection_name) as conn:

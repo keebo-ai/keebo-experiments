@@ -1,13 +1,16 @@
 """Create, check, and drop the demo's own Snowflake objects.
 
-The demo borrows nothing from the account. ``setup`` creates:
+``setup`` creates:
 
 - a dedicated **warehouse** (X-Small, generation pinned, suspended when idle), and
-- a transient **database** holding a generated 60M-row ``LINEITEM`` table,
+- a transient **database**, which gives the live-stats lookup a database to run
+  in and, only if Snowflake's sample data isn't readable, holds a generated copy
+  of the 60M-row ``LINEITEM`` table the workload sorts,
 
 each marked with :data:`queries.OWNER_COMMENT`. ``run`` and ``report`` refuse to
 start unless both exist and carry that mark, and ``cleanup`` drops exactly them.
 A same-named object without the mark is someone else's, and is never touched.
+The only thing read from the account is the read-only sample-data share.
 
 Functions take an open connection (or cursor). No ``click`` here; problems
 raise ``ValueError`` and the CLI turns them into clean messages.
@@ -42,12 +45,21 @@ class DemoObjects:
         return cls(validate_name(warehouse, "warehouse"), validate_name(database, "database"))
 
     @property
-    def table(self) -> str:
-        return f"{self.database}.{queries.SOURCE_TABLE}"
+    def generated_table(self) -> str:
+        """Where setup generates the source table when the sample data isn't readable."""
+        return f"{self.database}.{queries.GENERATED_TABLE}"
+
+
+@dataclass(frozen=True)
+class DemoState:
+    """What ``require`` found: the warehouse generation and the table to sort."""
+
+    generation: str  # '1' or '2'
+    source_table: str
 
 
 def setup(conn: Any, objects: DemoObjects, *, generation: str = "1", echo: Echo = _silent) -> None:
-    """Create the warehouse, database, and source table. Safe to rerun."""
+    """Create the warehouse and database, and the source table if the sample data isn't readable. Safe to rerun."""
     if generation not in warehouses.GENERATIONS:
         raise ValueError(f"generation must be one of {', '.join(warehouses.GENERATIONS)}, got {generation!r}")
     cur = conn.cursor()
@@ -89,11 +101,16 @@ def setup(conn: Any, objects: DemoObjects, *, generation: str = "1", echo: Echo 
         )
         cur.execute(f"USE WAREHOUSE {objects.warehouse}")
         try:
-            if table_exists(cur, objects):
-                echo(f"Reusing table {objects.table}.")
+            if table_exists(cur, queries.SAMPLE_TABLE):
+                echo(f"Using Snowflake's sample data, {queries.SAMPLE_TABLE} ({queries.SOURCE_ROWS:,} rows).")
+            elif table_exists(cur, objects.generated_table):
+                echo(f"Reusing table {objects.generated_table}.")
             else:
-                echo(f"Generating {objects.table} ({queries.SOURCE_ROWS:,} rows, a minute or two) ...")
-                cur.execute(queries.SOURCE_TABLE_SQL.format(table=objects.table, rows=queries.SOURCE_ROWS))
+                echo(
+                    f"This role can't read {queries.SAMPLE_TABLE}, so generating the same {queries.SOURCE_ROWS:,} "
+                    f"rows as {objects.generated_table} instead (a minute or two) ..."
+                )
+                cur.execute(queries.GENERATED_TABLE_SQL.format(table=objects.generated_table, rows=queries.SOURCE_ROWS))
             _check_account_usage(cur, echo)
         finally:
             # Silent: the warehouse may never have resumed if everything already existed.
@@ -103,8 +120,8 @@ def setup(conn: Any, objects: DemoObjects, *, generation: str = "1", echo: Echo 
         cur.close()
 
 
-def require(cur: Any, objects: DemoObjects, *, echo: Echo = _silent) -> str:
-    """Check the demo objects exist and are ours; return the warehouse generation ('1' / '2').
+def require(cur: Any, objects: DemoObjects, *, echo: Echo = _silent) -> DemoState:
+    """Check the demo objects exist and are ours; return the generation and the table to sort.
 
     A generation the account doesn't report is taken as '2', the pricier one,
     so the cost cap errs on the safe side (and ``echo`` says so).
@@ -115,19 +132,38 @@ def require(cur: Any, objects: DemoObjects, *, echo: Echo = _silent) -> str:
         raise ValueError(f"warehouse {objects.warehouse} doesn't exist. {not_set_up}")
     if dedicated.claim(cur, "DATABASE", objects.database, comment=queries.OWNER_COMMENT) is None:
         raise ValueError(f"database {objects.database} doesn't exist. {not_set_up}")
-    if not table_exists(cur, objects):
-        raise ValueError(f"table {objects.table} doesn't exist (setup didn't finish). {not_set_up}")
+    source_table = _source_table(cur, objects)
+    if source_table is None:
+        raise ValueError(
+            f"there's no table to sort: this role can't read {queries.SAMPLE_TABLE}, and "
+            f"{objects.generated_table} doesn't exist (setup didn't finish). {not_set_up}"
+        )
     generation = warehouses.generation_of(warehouse)
     if generation is None:
         echo(f"Note: {objects.warehouse} doesn't report its generation, so costs assume Gen2 (the pricier rate).")
-        return "2"
-    return generation
+        generation = "2"
+    return DemoState(generation=generation, source_table=source_table)
 
 
-def table_exists(cur: Any, objects: DemoObjects) -> bool:
-    """Whether the generated source table is there."""
-    schema, name = queries.SOURCE_TABLE.split(".")
-    cur.execute(f"SHOW TABLES LIKE '{name}' IN SCHEMA {objects.database}.{schema}")
+def _source_table(cur: Any, objects: DemoObjects) -> str | None:
+    """The sample table if this role can read it, else the generated copy if setup made one."""
+    for table in (queries.SAMPLE_TABLE, objects.generated_table):
+        if table_exists(cur, table):
+            return table
+    return None
+
+
+def table_exists(cur: Any, table: str) -> bool:
+    """Whether ``DB.SCHEMA.NAME`` exists and this role can see it.
+
+    For a database that's missing or not granted (e.g. an absent sample-data
+    share) Snowflake raises rather than returning no rows; that counts as "no".
+    """
+    database, schema, name = table.split(".")
+    try:
+        cur.execute(f"SHOW TABLES LIKE '{name}' IN SCHEMA {database}.{schema}")
+    except Exception:  # "does not exist or not authorized"
+        return False
     columns = [column[0].lower() for column in cur.description]
     return any(dict(zip(columns, row, strict=False)).get("name") == name for row in cur.fetchall())
 

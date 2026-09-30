@@ -12,7 +12,7 @@ OBJECTS = infra.DemoObjects.named()
 def test_named_validates_and_upper_cases():
     objects = infra.DemoObjects.named("my_wh", "my_db")
     assert (objects.warehouse, objects.database) == ("MY_WH", "MY_DB")
-    assert objects.table == "MY_DB.PUBLIC.LINEITEM"
+    assert objects.generated_table == "MY_DB.PUBLIC.LINEITEM"
 
 
 def test_named_rejects_unsafe_names():
@@ -20,8 +20,8 @@ def test_named_rejects_unsafe_names():
         infra.DemoObjects.named("bad; DROP", "DB")
 
 
-def test_setup_creates_everything_on_a_fresh_account(account):
-    cursor, conn = account(warehouse_comment=None, database_comment=None, table_exists=False)
+def test_setup_creates_the_warehouse_and_database_and_uses_the_sample_data(account):
+    cursor, conn = account(warehouse_comment=None, database_comment=None)
     messages: list[str] = []
 
     infra.setup(conn, OBJECTS, echo=messages.append)
@@ -35,17 +35,32 @@ def test_setup_creates_everything_on_a_fresh_account(account):
     assert f"COMMENT = '{queries.OWNER_COMMENT}'" in create_wh
     create_db = next(s for s in sql if s.startswith("CREATE TRANSIENT DATABASE"))
     assert "DATA_RETENTION_TIME_IN_DAYS = 0" in create_db
-    assert "SHOW TABLES LIKE 'LINEITEM' IN SCHEMA SPILLAGE_DEMO_DB.PUBLIC" in sql
-    assert any(s.strip().startswith("CREATE TABLE SPILLAGE_DEMO_DB.PUBLIC.LINEITEM AS") for s in sql)
-    # The table is generated on an X-Small with a timeout, then the warehouse is suspended.
-    assert "ALTER WAREHOUSE SPILLAGE_DEMO_WH SET WAREHOUSE_SIZE = XSMALL STATEMENT_TIMEOUT_IN_SECONDS = 900" in sql
+    assert "SHOW TABLES LIKE 'LINEITEM' IN SCHEMA SNOWFLAKE_SAMPLE_DATA.TPCH_SF10" in sql
+    assert not any(s.strip().startswith("CREATE TABLE") for s in sql)  # nothing to generate
+    assert any("Using Snowflake's sample data, SNOWFLAKE_SAMPLE_DATA.TPCH_SF10.LINEITEM" in m for m in messages)
     assert sql[-1] == "ALTER WAREHOUSE SPILLAGE_DEMO_WH SUSPEND"
     assert "Using role SYSADMIN" in messages[0]
     assert cursor.closed
 
 
+def test_setup_generates_the_table_when_the_sample_data_is_unreadable(account):
+    cursor, conn = account(warehouse_comment=None, database_comment=None, sample_data=False)
+    messages: list[str] = []
+
+    infra.setup(conn, OBJECTS, echo=messages.append)
+
+    sql = cursor.executed
+    ctas = next(s for s in sql if s.strip().startswith("CREATE TABLE"))
+    assert ctas.strip().startswith("CREATE TABLE SPILLAGE_DEMO_DB.PUBLIC.LINEITEM AS")
+    # Generated on an X-Small with its own timeout, then suspended.
+    resize = "ALTER WAREHOUSE SPILLAGE_DEMO_WH SET WAREHOUSE_SIZE = XSMALL STATEMENT_TIMEOUT_IN_SECONDS = 900"
+    assert sql.index(resize) < sql.index(ctas)
+    assert sql[-1] == "ALTER WAREHOUSE SPILLAGE_DEMO_WH SUSPEND"
+    assert any("can't read SNOWFLAKE_SAMPLE_DATA.TPCH_SF10.LINEITEM, so generating" in m for m in messages)
+
+
 def test_setup_reuses_its_own_objects(account):
-    cursor, conn = account()
+    cursor, conn = account(sample_data=False, generated_table=True)
     messages: list[str] = []
 
     infra.setup(conn, OBJECTS, echo=messages.append)
@@ -54,13 +69,6 @@ def test_setup_reuses_its_own_objects(account):
     assert "Reusing warehouse SPILLAGE_DEMO_WH." in messages
     assert "Reusing database SPILLAGE_DEMO_DB." in messages
     assert "Reusing table SPILLAGE_DEMO_DB.PUBLIC.LINEITEM." in messages
-
-
-def test_setup_regenerates_a_missing_table(account):
-    # The database exists but an earlier setup was interrupted before the table was built.
-    cursor, conn = account(table_exists=False)
-    infra.setup(conn, OBJECTS)
-    assert any(s.strip().startswith("CREATE TABLE SPILLAGE_DEMO_DB.PUBLIC.LINEITEM AS") for s in cursor.executed)
 
 
 @pytest.mark.parametrize("kind", ["warehouse", "database"])
@@ -96,21 +104,26 @@ def test_setup_warns_when_account_usage_is_unreadable(account):
     assert any("can't read SNOWFLAKE.ACCOUNT_USAGE" in m for m in messages)
 
 
-def test_require_returns_the_generation(account):
+def test_require_returns_the_generation_and_the_sample_table(account):
     cursor, _conn = account(generation="2")
-    assert infra.require(cursor, OBJECTS) == "2"
+    assert infra.require(cursor, OBJECTS) == infra.DemoState("2", queries.SAMPLE_TABLE)
+
+
+def test_require_falls_back_to_the_generated_table(account):
+    cursor, _conn = account(sample_data=False, generated_table=True)
+    assert infra.require(cursor, OBJECTS).source_table == "SPILLAGE_DEMO_DB.PUBLIC.LINEITEM"
 
 
 def test_require_assumes_gen2_when_the_account_does_not_say(account):
     cursor, _conn = account(generation=None)
     messages: list[str] = []
-    assert infra.require(cursor, OBJECTS, echo=messages.append) == "2"  # the pricier rate keeps the cap safe
+    assert infra.require(cursor, OBJECTS, echo=messages.append).generation == "2"  # the pricier rate keeps the cap safe
     assert "assume Gen2" in messages[0]
 
 
-def test_require_points_at_setup_when_the_table_is_missing(account):
-    cursor, _conn = account(table_exists=False)
-    with pytest.raises(ValueError, match="setup didn't finish"):
+def test_require_points_at_setup_when_there_is_no_table_to_sort(account):
+    cursor, _conn = account(sample_data=False, generated_table=False)
+    with pytest.raises(ValueError, match="no table to sort.*setup didn't finish"):
         infra.require(cursor, OBJECTS)
 
 

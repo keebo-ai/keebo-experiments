@@ -5,8 +5,9 @@ right-sized one, and watch what disk spill does to runtime and cost, live, on
 your own account.
 
 Built as a code-along for the Keebo spillage webinar. `setup` creates the
-demo's own warehouse, database, and data. `run` sorts that data on an X-Small,
-then on a Medium, and prints a side-by-side comparison the moment it finishes.
+demo's own warehouse and database. `run` sorts Snowflake's built-in sample data
+(TPC-H `LINEITEM`, 60M rows) on an X-Small, then on a Medium, and prints a
+side-by-side comparison the moment it finishes.
 A hard cost cap (1.5 credits per run by default) keeps spending bounded.
 
 ## What it demonstrates
@@ -34,7 +35,9 @@ Two scenarios, one command each:
 
 The workload is one `ROW_NUMBER() OVER (ORDER BY ...)` with no `PARTITION BY`,
 which forces Snowflake to sort every row in a single window. It returns only
-`MAX(row_rank)`, so one row comes back but the sort can't be skipped.
+`MAX(row_rank)`, so one row comes back but the sort can't be skipped. It
+runs over `SNOWFLAKE_SAMPLE_DATA.TPCH_SF10.LINEITEM`, or a generated copy of
+the same shape if your role can't read the sample data (see below).
 `--fanout N` sorts the 60M-row table N times over. It's the one setting that
 sizes the demo. Both sizes in a scenario run the same query text, so any
 difference in runtime or spill comes from the warehouse size.
@@ -44,8 +47,11 @@ difference in runtime or spill comes from the warehouse size.
 This uses **real compute** on **your** account. Gen1 rates are X-Small at 1
 credit/hour and Medium at 4; Gen2 bills 1.35× that.
 
-- **`setup`** generates the 60M-row table on an X-Small. It's capped at 15
-  minutes, which is **at most 0.25 credits** on Gen1 and usually far less.
+- **`setup`** uses the sample data if your role can read it. Then it only
+  creates objects and briefly resumes the X-Small to check `ACCOUNT_USAGE`
+  access (Snowflake's 60-second minimum, about 0.017 credits). If it has to
+  generate the table instead, that's capped at 15 minutes, which is **at most
+  0.25 credits** on Gen1 and usually far less.
 - **Every `run` has a hard cost cap, `--max-credits`, which defaults to 1.5.**
   The budget is split evenly between the two sizes and enforced as the
   warehouse's `STATEMENT_TIMEOUT_IN_SECONDS`, using the rate for the
@@ -74,13 +80,18 @@ webinar you may want to show a run you recorded beforehand.
 
 - **Warehouse** `SPILLAGE_DEMO_WH`: X-Small, generation pinned (`--generation`,
   default 1), auto-suspends after 60 seconds.
-- **Transient database** `SPILLAGE_DEMO_DB`, holding the generated
-  `PUBLIC.LINEITEM` table. Transient means no Time Travel or Fail-safe storage
-  charges.
+- **Transient database** `SPILLAGE_DEMO_DB`. It gives the live stats lookup a
+  database to run in. Only if your role can't read the sample data, it also
+  holds a generated `PUBLIC.LINEITEM` with the same shape: TPC-H's column names
+  and 60M rows. Transient means no Time Travel or Fail-safe storage charges.
+
+The only thing the demo reads from your account is the sample data, which is a
+read-only share. It never writes to it.
 
 Change the names with `--warehouse` and `--database`, and pass the same names
-to every command. `run` and `report` refuse to start unless both objects, and
-the table, exist and carry that comment; they point you back to `setup`. If an
+to every command. `run` and `report` refuse to start unless both objects exist
+and carry that comment, and there's a table to sort; they point you back to
+`setup`. If an
 object with one of those names already exists but wasn't created by the demo,
 every command stops with an error rather than resize, suspend, or drop it.
 `cleanup` drops the demo's objects and reports anything that wasn't there.
@@ -108,8 +119,12 @@ starting points and do one rehearsal run per scenario:
   `IMPORTED PRIVILEGES` on the `SNOWFLAKE` database). `setup` warns up front
   if the role can't read it.
 
-Nothing else is needed from the account: no sample-data share, no default
-warehouse or database.
+- **Optional:** the `SNOWFLAKE_SAMPLE_DATA` share, which most accounts have.
+  Without it, or without `IMPORTED PRIVILEGES` on it, `setup` generates an
+  equivalent table instead. An `ACCOUNTADMIN` can restore the share with
+  `CREATE DATABASE SNOWFLAKE_SAMPLE_DATA FROM SHARE SFC_SAMPLES.SAMPLE_DATA`.
+
+Nothing else is needed from the account: no default warehouse or database.
 
 ## Credentials
 
@@ -123,7 +138,7 @@ for details, including MFA/SSO token caching.
 ## Usage
 
 ```bash
-# 1. Create the warehouse, database, and data. Safe to rerun.
+# 1. Create the warehouse and database (and the data, if the sample isn't readable). Safe to rerun.
 poetry run keebo-experiments spillage setup
 
 # 2. Local spill: X-Small vs Medium. The comparison prints as soon as it finishes.
@@ -195,7 +210,7 @@ Cost cap: at most 1.5 credits of Gen1 compute (X-Small stops after 45 min, Mediu
 - `cli.py` — thin `click` command layer (`setup`, `run`, `report`, `cleanup`).
 - `core/` — the domain logic, with no `click` dependency; each function takes an
   open connection so it stays testable:
-  - `core/queries.py` — the generated table, the workload, the two scenarios,
+  - `core/queries.py` — the source table (sample, or generated), the workload, the two scenarios,
     the cost cap, the live-stats query, and the `ACCOUNT_USAGE` report queries.
   - `core/infra.py` — create, check, and drop the demo's warehouse and database.
   - `core/run.py` — run both sizes, read live stats, and suggest calibration.

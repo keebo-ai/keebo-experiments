@@ -30,8 +30,8 @@ def test_fanout_must_be_positive(bad):
         queries.build_workload(TABLE, bad)
 
 
-def test_source_table_is_generated_not_borrowed():
-    sql = queries.SOURCE_TABLE_SQL.format(table=TABLE, rows=queries.SOURCE_ROWS)
+def test_fallback_table_is_generated_with_the_sample_tables_shape():
+    sql = queries.GENERATED_TABLE_SQL.format(table=TABLE, rows=queries.SOURCE_ROWS)
     assert sql.strip().startswith(f"CREATE TABLE {TABLE} AS")
     assert "GENERATOR(ROWCOUNT => 60000000)" in sql
     assert "SNOWFLAKE_SAMPLE_DATA" not in sql
@@ -74,10 +74,15 @@ def test_statement_timeout_rejects_budgets_under_the_billing_minimum():
         queries.statement_timeout_s("MEDIUM", generation="1", max_credits=0.05)
 
 
-def test_live_stats_is_database_qualified_and_binds_the_query_id():
+def test_live_stats_reads_spill_from_operator_stats_and_elapsed_from_history():
     sql = queries.LIVE_STATS_SQL.format(database="SPILLAGE_DEMO_DB")
+    # INFORMATION_SCHEMA's query history has no spill columns; operator stats do.
+    assert "GET_QUERY_OPERATOR_STATS(%s)" in sql
+    assert "spilling:bytes_spilled_local_storage" in sql
+    assert "spilling:bytes_spilled_remote_storage" in sql
+    assert "bytes_spilled_to_" not in sql
     assert "SPILLAGE_DEMO_DB.INFORMATION_SCHEMA.QUERY_HISTORY_BY_SESSION" in sql
-    assert "query_id = %s" in sql
+    assert sql.count("%s") == 2  # the query id, bound twice
 
 
 def test_report_steps_filter_on_the_run_and_group_per_run():

@@ -75,18 +75,21 @@ def run_comparison(
     if not re.fullmatch(r"[0-9A-Za-z-]+", run_id):
         raise ValueError(f"run id must be letters, digits, and dashes, got {run_id!r}")
     sizes = {"undersized": scenario.undersized, "right_sized": scenario.right_sized}
-    workload = queries.build_workload(objects.table, scenario.fanout)
 
     cur = conn.cursor()
     results: list[SideResult] = []
     try:
-        generation = infra.require(cur, objects, echo=echo)
+        state = infra.require(cur, objects, echo=echo)
+        generation = state.generation
+        workload = queries.build_workload(state.source_table, scenario.fanout)
         timeouts = {
             side: queries.statement_timeout_s(size, generation=generation, max_credits=max_credits)
             for side, size in sizes.items()
         }
         echo(f"Scenario: {scenario.label} — {scenario.blurb}")
         echo(f"Run id: {run_id} (how `spillage report` labels this run)")
+        rows = scenario.fanout * queries.SOURCE_ROWS
+        echo(f"Data: {state.source_table}, sorted {scenario.fanout}x over ({rows:,} rows).")
         caps = ", ".join(f"{warehouses.SIZE_LABEL[sizes[s]]} stops after {timeouts[s] / 60:.0f} min" for s in SIDES)
         echo(f"Cost cap: at most {max_credits:g} credits of Gen{generation} compute ({caps}).")
 
@@ -195,7 +198,7 @@ def _read_live_stats(
     tries: int = 5,
     delay: float = 2.0,
 ) -> dict[str, Any] | None:
-    """One query's spill and elapsed time from INFORMATION_SCHEMA, or ``None``.
+    """One query's spill and elapsed time (see ``queries.LIVE_STATS_SQL``), or ``None``.
 
     Never raises: by now the query has been paid for, so a failed lookup should
     cost the comparison its spill numbers, not the whole run.
@@ -203,11 +206,12 @@ def _read_live_stats(
     sql = queries.LIVE_STATS_SQL.format(database=database)
     try:
         for attempt in range(1, tries + 1):
-            cur.execute(sql, (query_id,))
+            cur.execute(sql, (query_id, query_id))
             rows = cur.fetchall()
-            if rows:
-                columns = [col[0].lower() for col in cur.description]
-                return dict(zip(columns, rows[0], strict=False))
+            columns = [col[0].lower() for col in cur.description]
+            stats = dict(zip(columns, rows[0], strict=False)) if rows else {}
+            if stats.get("elapsed_ms") is not None:
+                return stats
             if attempt < tries:
                 sleep(delay)
     except Exception as exc:  # best effort by design

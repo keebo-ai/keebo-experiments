@@ -1,7 +1,7 @@
 """A fake Snowflake account for the spillage tests.
 
 It answers the statements the demo issues by what they ask for — SHOW for the
-ownership checks, the live-stats lookup, CURRENT_ROLE() — through the shared
+ownership and table checks, the live-stats lookup, CURRENT_ROLE() — through the shared
 ``FakeCursor``'s ``route`` hook, so tests read as "on an account where ...".
 """
 
@@ -26,7 +26,8 @@ class FakeAccount:
     warehouse_comment: str | None = OURS
     database_comment: str | None = OURS
     generation: str | None = "1"
-    table_exists: bool = True
+    sample_data: bool = True  # can the role read SNOWFLAKE_SAMPLE_DATA?
+    generated_table: bool = False  # has setup generated the fallback table?
     # One (bytes_local, bytes_remote, elapsed_ms) row per lookup, or [] for "not there yet".
     live_stats: list[tuple[Any, ...]] = field(default_factory=lambda: [(3 * GB, 0, 42_000)])
     # Optional per-lookup answers (e.g. [[], [], [row]] = "arrives on the third try"),
@@ -43,7 +44,12 @@ class FakeAccount:
             rows = [] if self.database_comment is None else [(OBJECTS.database, self.database_comment)]
             return rows, [("name",), ("comment",)]
         if sql.startswith("SHOW TABLES"):
-            return ([("LINEITEM",)] if self.table_exists else []), [("name",)]
+            if "SNOWFLAKE_SAMPLE_DATA" in sql:
+                if not self.sample_data:
+                    # What Snowflake does for a missing or ungranted share: raise, not return nothing.
+                    raise RuntimeError("Database 'SNOWFLAKE_SAMPLE_DATA' does not exist or not authorized.")
+                return [("LINEITEM",)], [("name",)]
+            return ([("LINEITEM",)] if self.generated_table else []), [("name",)]
         if "QUERY_HISTORY_BY_SESSION" in sql:
             rows = self.live_stats_sequence.pop(0) if self.live_stats_sequence else self.live_stats
             return rows, [("BYTES_LOCAL",), ("BYTES_REMOTE",), ("ELAPSED_MS",)]

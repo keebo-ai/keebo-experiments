@@ -28,15 +28,18 @@ QUERY_TAG_PREFIX = "spill"
 # --------------------------------------------------------------------------- #
 # The source table
 #
-# `setup` generates its own table (once) instead of borrowing one, so the demo needs no
-# sample-data share and behaves the same on every account. It has LINEITEM's
-# column names and 60M rows (the size of TPCH_SF10). Every value is a hash of the
-# row number, so the data is the same wherever it's generated.
+# The workload sorts Snowflake's own sample data, TPC-H LINEITEM at scale factor
+# 10 (60M rows), which most accounts already have. Where the role can't read the
+# SNOWFLAKE_SAMPLE_DATA share (it can be dropped, or not granted), `setup`
+# generates a table of the same shape in the demo database instead: LINEITEM's
+# column names and 60M rows, every value a hash of the row number. Either way
+# the demo runs on any account, and fanout N sorts N x 60M rows.
 # --------------------------------------------------------------------------- #
-SOURCE_TABLE = "PUBLIC.LINEITEM"  # inside the demo database
+SAMPLE_TABLE = "SNOWFLAKE_SAMPLE_DATA.TPCH_SF10.LINEITEM"
+GENERATED_TABLE = "PUBLIC.LINEITEM"  # inside the demo database; only if the sample isn't readable
 SOURCE_ROWS = 60_000_000
 
-SOURCE_TABLE_SQL = """
+GENERATED_TABLE_SQL = """
 CREATE TABLE {table} AS
 SELECT seq                                                           AS l_orderkey,
        ABS(HASH(seq, 1)) % 2000000 + 1                               AS l_partkey,
@@ -188,17 +191,24 @@ def statement_timeout_s(size: str, *, generation: str, max_credits: float) -> in
 # --------------------------------------------------------------------------- #
 # Near-real-time per-query stats
 #
-# QUERY_HISTORY_BY_SESSION returns this session's queries within seconds, where
-# ACCOUNT_USAGE lags minutes, so the demo can show spill live. It's qualified
-# with the demo database so it works on sessions with no current database.
-# ``query_id`` is bound as a value (it contains hyphens).
+# ACCOUNT_USAGE lags minutes, so the demo reads two faster sources instead:
+#
+# - GET_QUERY_OPERATOR_STATS gives each operator's spill as soon as the query
+#   finishes. (INFORMATION_SCHEMA's query history has no spill columns.) An
+#   operator that didn't spill has no ``spilling`` entry, so its spill is 0.
+# - QUERY_HISTORY_BY_SESSION gives the query's elapsed time. It's qualified
+#   with the demo database so it works on sessions with no current database.
+#
+# ``elapsed_ms`` is NULL until the query shows up, which is what the lookup
+# retries on. ``query_id`` is bound as a value (twice) because it has hyphens.
 # --------------------------------------------------------------------------- #
 LIVE_STATS_SQL = """
-SELECT bytes_spilled_to_local_storage  AS bytes_local,
-       bytes_spilled_to_remote_storage AS bytes_remote,
-       total_elapsed_time              AS elapsed_ms
-FROM TABLE({database}.INFORMATION_SCHEMA.QUERY_HISTORY_BY_SESSION(RESULT_LIMIT => 1000))
-WHERE query_id = %s
+SELECT (SELECT total_elapsed_time
+        FROM TABLE({database}.INFORMATION_SCHEMA.QUERY_HISTORY_BY_SESSION(RESULT_LIMIT => 1000))
+        WHERE query_id = %s)                                                           AS elapsed_ms,
+       COALESCE(SUM(operator_statistics:spilling:bytes_spilled_local_storage::NUMBER), 0)  AS bytes_local,
+       COALESCE(SUM(operator_statistics:spilling:bytes_spilled_remote_storage::NUMBER), 0) AS bytes_remote
+FROM TABLE(GET_QUERY_OPERATOR_STATS(%s))
 """
 
 ACCOUNT_USAGE_PROBE = "SELECT 1 FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY LIMIT 1"

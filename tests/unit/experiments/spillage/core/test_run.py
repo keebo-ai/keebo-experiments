@@ -12,7 +12,7 @@ GB = 1024**3
 OBJECTS = infra.DemoObjects.named()
 LOCAL = queries.SCENARIOS["local"]
 REMOTE = queries.SCENARIOS["remote"]
-WORKLOAD = queries.build_workload(OBJECTS.table, LOCAL.fanout)
+WORKLOAD = queries.build_workload(queries.SAMPLE_TABLE, LOCAL.fanout)
 
 
 def _clock(step: float = 10.0):
@@ -69,6 +69,16 @@ def test_run_issues_expected_sql(account):
     # Left at the cheapest size, with setup's timeout rather than the Medium's, for `report`.
     assert sql[-1] == "ALTER WAREHOUSE SPILLAGE_DEMO_WH SET WAREHOUSE_SIZE = XSMALL STATEMENT_TIMEOUT_IN_SECONDS = 900"
     assert cursor.closed
+
+
+def test_run_sorts_the_generated_table_when_the_sample_is_unreadable(account):
+    cursor, conn = account(sample_data=False, generated_table=True)
+    messages: list[str] = []
+
+    _run(conn, echo=messages.append)
+
+    assert cursor.executed.count(queries.build_workload(OBJECTS.generated_table, LOCAL.fanout)) == 2
+    assert any("Data: SPILLAGE_DEMO_DB.PUBLIC.LINEITEM, sorted 8x over (480,000,000 rows)" in m for m in messages)
 
 
 def test_query_tag_is_cleared_before_the_stats_lookup(account):
@@ -129,6 +139,16 @@ def test_stats_lookup_retries_until_the_row_arrives(account):
     assert undersized.gb_spill_local == 1.0
     # Two misses and a hit for the first side, then one hit for the second.
     assert sum("QUERY_HISTORY_BY_SESSION" in s for s in cursor.executed) == 4
+
+
+def test_stats_lookup_retries_while_elapsed_is_still_null(account):
+    # The aggregate always returns a row; elapsed_ms is NULL until the query is in history.
+    cursor, conn = account(live_stats_sequence=[[(0, 0, None)], [(2 * GB, 0, 9_000)]])
+
+    undersized, _right_sized = _run(conn)
+
+    assert (undersized.gb_spill_local, undersized.runtime_s) == (2.0, 9.0)
+    assert sum("QUERY_HISTORY_BY_SESSION" in s for s in cursor.executed) == 3
 
 
 def test_a_failed_stats_lookup_keeps_the_run(account):
