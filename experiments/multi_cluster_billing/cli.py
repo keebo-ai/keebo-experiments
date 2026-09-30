@@ -211,11 +211,11 @@ def multi_cluster_billing() -> None:
         keebo-experiments multi-cluster-billing report   # read the bill back (retry until it lands)
         keebo-experiments multi-cluster-billing cleanup  # drop the test warehouses
 
-    Credentials: pass --connection NAME to use an entry from Snowflake's
-    connections.toml, or set SNOWFLAKE_ACCOUNT / SNOWFLAKE_USER /
-    SNOWFLAKE_PASSWORD (or SNOWFLAKE_AUTHENTICATOR) / SNOWFLAKE_ROLE in the
-    environment or a .env file (see .env.example). Anything missing is prompted
-    for. SNOWFLAKE_ROLE needs ACCOUNT_USAGE access for the report.
+    Credentials: pass --connection NAME to use a connection from Snowflake's
+    config, or set SNOWFLAKE_ACCOUNT / SNOWFLAKE_USER / SNOWFLAKE_PASSWORD (or
+    SNOWFLAKE_AUTHENTICATOR) / SNOWFLAKE_ROLE in the environment or a .env file
+    (see .env.example). With neither, your Snowflake default connection is used
+    if you have one; anything still missing is prompted for. SNOWFLAKE_ROLE needs ACCOUNT_USAGE access for the report.
 
     WARNING: this uses real compute. A default run takes about an hour and bills
     roughly 2 credits. Multi-cluster warehouses require the Enterprise edition or
