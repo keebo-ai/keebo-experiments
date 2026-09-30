@@ -54,40 +54,43 @@ FROM (SELECT SEQ8() AS seq FROM TABLE(GENERATOR(ROWCOUNT => {rows})))
 # --------------------------------------------------------------------------- #
 # The spill-forcing workload
 #
-# One ROW_NUMBER() OVER (ORDER BY ...) with no PARTITION BY makes Snowflake sort
-# every row in a single window. That sort is what overflows a small
-# warehouse's memory and spills to disk. MAX(row_rank) keeps the result to one
-# row while still needing every rank, so the sort can't be optimized away.
-# Both warehouse sizes run the identical text, so any difference is the size.
+# A GROUP BY over keys that are (nearly) unique per row gives one group per
+# row, so the hash table holds every row. That hash table is what overflows a
+# small warehouse's memory and spills to disk. Snowflake splits the groups
+# across the warehouse's nodes, so a bigger warehouse really does have more
+# memory for it and spills less. (A single global ORDER BY window, which this
+# demo first used, finishes in one place: it spilled the same on a Medium as on
+# an X-Small, just faster.) MAX(revenue) keeps the result to one row while still
+# needing every group, so the aggregation can't be skipped. Both warehouse sizes
+# run the identical text, so any difference is the size.
 #
-# ``fanout`` cross-joins a tiny generated table to sort ``fanout`` copies of
-# every row: fanout N sorts N x 60M rows. It is the one dial that sizes the
-# demo. Too low and the undersized warehouse doesn't spill; too high and the
-# right-sized one spills as well. ``run`` says which way to turn it.
+# ``fanout`` cross-joins a tiny generated table to aggregate ``fanout`` copies
+# of every row, each its own group: fanout N means N x 60M groups. It is the one
+# dial that sizes the demo. Too low and the undersized warehouse doesn't spill;
+# too high and the right-sized one spills as well. ``run`` says which way to
+# turn it.
 # --------------------------------------------------------------------------- #
-WORKLOAD_PREFIX = "SELECT MAX(row_rank) AS max_rank"
+WORKLOAD_PREFIX = "SELECT MAX(revenue) AS max_revenue"
 
 _WORKLOAD_SQL = """
-SELECT MAX(row_rank) AS max_rank
+SELECT MAX(revenue) AS max_revenue
 FROM (
-    SELECT ROW_NUMBER() OVER (
-               ORDER BY l_extendedprice DESC, l_discount DESC, l_shipdate,
-                        l_orderkey, l_partkey, l_suppkey{fan_order}
-           ) AS row_rank
+    SELECT SUM(l_extendedprice * (1 - l_discount)) AS revenue
     FROM {table}{fan_join}
+    GROUP BY l_orderkey, l_partkey, l_suppkey, l_shipdate{fan_group}
 )
 """
 
 
 def build_workload(table: str, fanout: int = 1) -> str:
-    """The workload SQL over ``table``, sorting ``fanout`` copies of every row."""
+    """The workload SQL over ``table``, aggregating ``fanout`` copies of every row."""
     if fanout < 1:
         raise ValueError(f"fanout must be a positive integer, got {fanout}")
-    fan_join = fan_order = ""
+    fan_join = fan_group = ""
     if fanout > 1:
         fan_join = f"\n    CROSS JOIN (SELECT SEQ4() AS seq FROM TABLE(GENERATOR(ROWCOUNT => {int(fanout)}))) AS fan"
-        fan_order = ", fan.seq"
-    return _WORKLOAD_SQL.format(table=table, fan_join=fan_join, fan_order=fan_order).strip()
+        fan_group = ", fan.seq"
+    return _WORKLOAD_SQL.format(table=table, fan_join=fan_join, fan_group=fan_group).strip()
 
 
 # --------------------------------------------------------------------------- #

@@ -9,19 +9,20 @@ from experiments.spillage.core import queries
 TABLE = "SPILLAGE_DEMO_DB.PUBLIC.LINEITEM"
 
 
-def test_workload_is_one_global_sort_that_cannot_be_skipped():
+def test_workload_is_a_high_cardinality_aggregation_that_cannot_be_skipped():
     sql = queries.build_workload(TABLE, 1)
     assert sql.startswith(queries.WORKLOAD_PREFIX)
-    assert "ROW_NUMBER() OVER (" in sql
-    assert "PARTITION BY" not in sql  # one global window is what forces the spill
+    # One group per row: the hash table holds every row, spread across the warehouse's nodes.
+    assert "GROUP BY l_orderkey, l_partkey, l_suppkey, l_shipdate" in sql
+    assert "OVER (" not in sql  # a global window finishes in one place and doesn't scale with size
     assert f"FROM {TABLE}" in sql
     assert "GENERATOR" not in sql
 
 
-def test_fanout_multiplies_the_rows_sorted():
+def test_fanout_multiplies_the_groups():
     sql = queries.build_workload(TABLE, 4)
     assert "GENERATOR(ROWCOUNT => 4)" in sql
-    assert "fan.seq" in sql
+    assert sql.rstrip().rstrip(")").rstrip().endswith("fan.seq")  # each copy is its own group
 
 
 @pytest.mark.parametrize("bad", [0, -3])
@@ -36,7 +37,7 @@ def test_fallback_table_is_generated_with_the_sample_tables_shape():
     assert "GENERATOR(ROWCOUNT => 60000000)" in sql
     assert "SNOWFLAKE_SAMPLE_DATA" not in sql
     for column in ("l_extendedprice", "l_discount", "l_shipdate", "l_orderkey", "l_partkey", "l_suppkey"):
-        assert f"AS {column}" in sql  # every column the workload sorts on
+        assert f"AS {column}" in sql  # every column the workload reads
 
 
 def test_scenarios_compare_xsmall_with_medium():
