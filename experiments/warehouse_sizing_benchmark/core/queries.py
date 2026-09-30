@@ -7,6 +7,7 @@ or CLI dependencies here.
 
 from __future__ import annotations
 
+from common import warehouses
 from common.sql import validate_identifier
 
 __all__ = [
@@ -37,16 +38,10 @@ BENCHMARK_QUERY = (
     "ORDER BY net_revenue DESC LIMIT 100"
 )
 
-# Each entry: (ALTER WAREHOUSE keyword, name recorded in QUERY_HISTORY, credits/hr).
-SIZES: list[tuple[str, str, int]] = [
-    ("XSMALL", "X-Small", 1),
-    ("SMALL", "Small", 2),
-    ("MEDIUM", "Medium", 4),
-    ("LARGE", "Large", 8),
-    ("XLARGE", "X-Large", 16),
-    ("XXLARGE", "2X-Large", 32),
-]
-SIZE_KEYWORDS = [keyword for keyword, _, _ in SIZES]
+# The sweep covers every standard size, straight from the shared table: each entry
+# is (ALTER WAREHOUSE keyword, name recorded in QUERY_HISTORY, credits/hr).
+SIZES = warehouses.SIZES
+SIZE_KEYWORDS = warehouses.SIZE_KEYWORDS
 
 DEFAULT_TABLE = "SNOWFLAKE_SAMPLE_DATA.TPCH_SF100.LINEITEM"
 DEFAULT_WAREHOUSE = "SIZING_BENCHMARK_WH"
