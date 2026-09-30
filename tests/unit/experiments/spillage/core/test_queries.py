@@ -1,4 +1,4 @@
-"""Unit tests for the spillage workload, scenarios, and SQL constants."""
+"""Unit tests for the spillage workload, scenarios, cost cap, and SQL."""
 
 from __future__ import annotations
 
@@ -6,41 +6,49 @@ import pytest
 
 from experiments.spillage.core import queries
 
+TABLE = "SPILLAGE_DEMO_DB.PUBLIC.LINEITEM"
 
-def test_plain_workload_is_a_global_sort_with_tiny_output():
-    sql = queries.build_workload(1)
-    assert sql.startswith("SELECT COUNT(*) AS sorted_rows")
-    assert "ROW_NUMBER() OVER" in sql
+
+def test_workload_is_one_global_sort_that_cannot_be_skipped():
+    sql = queries.build_workload(TABLE, 1)
+    assert sql.startswith(queries.WORKLOAD_PREFIX)
+    assert "ROW_NUMBER() OVER (" in sql
     assert "PARTITION BY" not in sql  # one global window is what forces the spill
-    assert "IDENTIFIER($spill_table)" in sql
+    assert f"FROM {TABLE}" in sql
     assert "GENERATOR" not in sql
 
 
-def test_fanout_amplifies_the_sort():
-    sql = queries.build_workload(4)
+def test_fanout_multiplies_the_rows_sorted():
+    sql = queries.build_workload(TABLE, 4)
     assert "GENERATOR(ROWCOUNT => 4)" in sql
-    assert "SEQ4() AS seq" in sql
     assert "fan.seq" in sql
 
 
 @pytest.mark.parametrize("bad", [0, -3])
 def test_fanout_must_be_positive(bad):
     with pytest.raises(ValueError, match="fanout"):
-        queries.build_workload(bad)
+        queries.build_workload(TABLE, bad)
 
 
-def test_scenarios_pair_an_undersized_and_a_right_sized_warehouse():
+def test_source_table_is_generated_not_borrowed():
+    sql = queries.SOURCE_TABLE_SQL.format(table=TABLE, rows=queries.SOURCE_ROWS)
+    assert sql.strip().startswith(f"CREATE TABLE IF NOT EXISTS {TABLE} AS")
+    assert "GENERATOR(ROWCOUNT => 60000000)" in sql
+    assert "SNOWFLAKE_SAMPLE_DATA" not in sql
+    for column in ("l_extendedprice", "l_discount", "l_shipdate", "l_orderkey", "l_partkey", "l_suppkey"):
+        assert f"AS {column}" in sql  # every column the workload sorts on
+
+
+def test_scenarios_compare_xsmall_with_medium():
     assert set(queries.SCENARIOS) == {"local", "remote"}
     for scenario in queries.SCENARIOS.values():
-        assert queries.CREDITS_PER_HOUR[scenario.undersized] < queries.CREDITS_PER_HOUR[scenario.right_sized]
+        assert (scenario.undersized, scenario.right_sized) == ("XSMALL", "MEDIUM")
     assert queries.SCENARIOS["remote"].fanout > queries.SCENARIOS["local"].fanout
 
 
 def test_resolve_scenario_applies_overrides():
-    scenario = queries.resolve_scenario("LOCAL", fanout=2, undersized="small", right_sized="xlarge")
-    assert scenario.name == "local"
-    assert (scenario.fanout, scenario.undersized, scenario.right_sized) == (2, "SMALL", "XLARGE")
-    assert scenario.table == queries.DEFAULT_TABLE
+    scenario = queries.resolve_scenario("LOCAL", fanout=2, undersized="small", right_sized="large")
+    assert (scenario.name, scenario.fanout, scenario.undersized, scenario.right_sized) == ("local", 2, "SMALL", "LARGE")
 
 
 def test_resolve_scenario_rejects_unknown_names():
@@ -48,24 +56,33 @@ def test_resolve_scenario_rejects_unknown_names():
         queries.resolve_scenario("cloud")
 
 
-def test_statement_timeout_splits_the_budget_across_sizes():
-    # 1.5 credits -> 0.75 per size: 45 min at 1 credit/hr, ~11 min at 4.
-    assert queries.statement_timeout_s("XSMALL", max_credits=1.5) == 2700
-    assert queries.statement_timeout_s("MEDIUM", max_credits=1.5) == 675
-    assert queries.statement_timeout_s("XSMALL", max_credits=1.5, runs=3) == 900
+def test_statement_timeout_splits_the_budget_and_prices_the_generation():
+    # 1.5 credits -> 0.75 per size: 45 min on a Gen1 X-Small, ~11 min on a Gen1 Medium.
+    assert queries.statement_timeout_s("XSMALL", generation="1", max_credits=1.5) == 2700
+    assert queries.statement_timeout_s("MEDIUM", generation="1", max_credits=1.5) == 675
+    # Gen2 bills 1.35x, so the same budget buys less time (1999.99s, rounded down to stay inside the cap).
+    assert queries.statement_timeout_s("XSMALL", generation="2", max_credits=1.5) == 1999
 
 
 def test_statement_timeout_rejects_budgets_under_the_billing_minimum():
     with pytest.raises(ValueError, match="under 60 seconds"):
-        queries.statement_timeout_s("MEDIUM", max_credits=0.05)
+        queries.statement_timeout_s("MEDIUM", generation="1", max_credits=0.05)
 
 
-def test_live_stats_binds_the_query_id():
-    assert "QUERY_HISTORY_BY_SESSION" in queries.LIVE_STATS_SQL
-    assert "query_id = %s" in queries.LIVE_STATS_SQL
+def test_live_stats_is_database_qualified_and_binds_the_query_id():
+    sql = queries.LIVE_STATS_SQL.format(database="SPILLAGE_DEMO_DB")
+    assert "SPILLAGE_DEMO_DB.INFORMATION_SCHEMA.QUERY_HISTORY_BY_SESSION" in sql
+    assert "query_id = %s" in sql
 
 
-def test_report_steps_format_cleanly():
-    for _step, _title, sql in queries.REPORT_STEPS:
-        formatted = sql.format(hours=6, wh="SPILLAGE_DEMO_WH")
-        assert "{" not in formatted
+def test_report_steps_filter_on_the_run_and_group_per_run():
+    filled = [
+        sql.format(wh="SPILLAGE_DEMO_WH", hours=6, tag=queries.QUERY_TAG_PREFIX, workload=queries.WORKLOAD_PREFIX)
+        for _, _, sql in queries.REPORT_STEPS
+    ]
+    assert all("{" not in sql for sql in filled)
+    assert all("warehouse_name = 'SPILLAGE_DEMO_WH'" in sql for sql in filled)
+    for sql in filled[:2]:  # the per-query steps
+        assert "query_tag LIKE 'spill:%'" in sql
+        assert f"query_text ILIKE '{queries.WORKLOAD_PREFIX}%'" in sql
+    assert "GROUP BY 1, 2, 3, 4" in filled[1]  # run, scenario, side, size

@@ -1,8 +1,8 @@
 """Turn a spillage run into report tables, and reconcile against ACCOUNT_USAGE.
 
-:func:`comparison_tables` formats the live results of a run (the A/B table and
-the verdict). :func:`read_report` reads the authoritative billed credits and
-spill back from ``ACCOUNT_USAGE`` afterwards. Both return
+:func:`comparison_tables` formats the live results of a run (the side-by-side
+table and the verdict). :func:`read_report` reads the authoritative spill and
+billed credits back from ``ACCOUNT_USAGE`` afterwards. Both return
 :class:`~common.tables.ReportTable` values; the CLI prints them. No ``click`` here.
 """
 
@@ -11,8 +11,8 @@ from __future__ import annotations
 from typing import Any
 
 from common.tables import ReportTable
-from experiments.spillage.core import queries
-from experiments.spillage.core.run import ArmResult
+from experiments.spillage.core import infra, queries
+from experiments.spillage.core.run import SideResult, side_label
 
 _MISSING = "—"
 
@@ -21,18 +21,18 @@ def _num(value: float | None, digits: int) -> str:
     return _MISSING if value is None else f"{value:.{digits}f}"
 
 
-def _bound(r: ArmResult, value: float | None, digits: int) -> str:
-    """Format a measurement, marking it a lower bound (``+``) if the run hit the cost cap."""
+def _measured(result: SideResult, value: float | None, digits: int) -> str:
+    """Format a measurement, marking it a lower bound (``+``) if that side hit the cost cap."""
     text = _num(value, digits)
-    return f"{text}+" if r.timed_out and value is not None else text
+    return f"{text}+" if result.timed_out and value is not None else text
 
 
-def _speedup(u: ArmResult, g: ArmResult) -> str:
-    if g.timed_out or not u.runtime_s or not g.runtime_s:
+def _speedup(undersized: SideResult, right_sized: SideResult) -> str:
+    if right_sized.timed_out or not undersized.runtime_s or not right_sized.runtime_s:
         return _MISSING
-    ratio = u.runtime_s / g.runtime_s
+    ratio = undersized.runtime_s / right_sized.runtime_s
     text = f"{ratio:.1f}x faster" if ratio >= 1 else f"{1 / ratio:.1f}x slower"
-    return f"at least {text}" if u.timed_out else text
+    return f"at least {text}" if undersized.timed_out else text
 
 
 def _spill_change(undersized: float | None, right_sized: float | None) -> str:
@@ -43,90 +43,101 @@ def _spill_change(undersized: float | None, right_sized: float | None) -> str:
     return f"{(undersized - right_sized) / undersized * 100:.0f}% less"
 
 
-def _cost_change(undersized: float, right_sized: float) -> str:
-    if not undersized or not right_sized:
+def _cost_change(undersized: SideResult, right_sized: SideResult) -> str:
+    if undersized.timed_out or right_sized.timed_out or not undersized.est_credits or not right_sized.est_credits:
         return _MISSING
-    diff = (right_sized - undersized) / undersized * 100
+    diff = (right_sized.est_credits - undersized.est_credits) / undersized.est_credits * 100
     if round(diff) == 0:
         return "about the same"
     return f"{abs(diff):.0f}% cheaper" if diff < 0 else f"{diff:.0f}% pricier"
 
 
-def comparison_tables(results: list[ArmResult], *, scenario: queries.Scenario) -> list[ReportTable]:
-    """The live A/B table for a run, plus the verdict when both arms ran."""
-    rows = [
-        (
-            r.arm.replace("_", "-"),
-            r.size_label,
-            r.credits_per_hour,
-            _bound(r, r.runtime_s, 1),
-            _bound(r, r.gb_spill_local, 2),
-            _bound(r, r.gb_spill_remote, 2),
-            _bound(r, r.est_credits, 5),
-        )
-        for r in results
-    ]
+def comparison_tables(results: list[SideResult], *, scenario: queries.Scenario) -> list[ReportTable]:
+    """The live side-by-side table for a run, plus the verdict when both sides ran."""
     tables = [
         ReportTable(
             1,
             f"Same workload, two warehouse sizes — {scenario.label}",
-            ["arm", "size", "credits_per_hr", "runtime_s", "spill_local_gb", "spill_remote_gb", "est_credits"],
-            rows,
+            ["warehouse", "size", "credits_per_hr", "runtime_s", "spill_local_gb", "spill_remote_gb", "est_credits"],
+            [
+                (
+                    side_label(r.side),
+                    r.size_label,
+                    f"{r.credits_per_hour:g}",
+                    _measured(r, r.runtime_s, 1),
+                    _measured(r, r.gb_spill_local, 2),
+                    _measured(r, r.gb_spill_remote, 2),
+                    _measured(r, r.est_credits, 5),
+                )
+                for r in results
+            ],
         )
     ]
 
-    by_arm = {r.arm: r for r in results}
-    if "undersized" in by_arm and "right_sized" in by_arm:
-        u, g = by_arm["undersized"], by_arm["right_sized"]
+    by_side = {r.side: r for r in results}
+    if "undersized" in by_side and "right_sized" in by_side:
         tables.append(
             ReportTable(
                 2,
                 "The verdict (right-sized vs undersized)",
-                ["metric", "undersized", "right_sized", "change"],
-                [
-                    ("runtime (s)", _bound(u, u.runtime_s, 1), _bound(g, g.runtime_s, 1), _speedup(u, g)),
-                    (
-                        "local spill (GB)",
-                        _bound(u, u.gb_spill_local, 2),
-                        _bound(g, g.gb_spill_local, 2),
-                        _MISSING if g.timed_out else _spill_change(u.gb_spill_local, g.gb_spill_local),
-                    ),
-                    (
-                        "remote spill (GB)",
-                        _bound(u, u.gb_spill_remote, 2),
-                        _bound(g, g.gb_spill_remote, 2),
-                        _MISSING if g.timed_out else _spill_change(u.gb_spill_remote, g.gb_spill_remote),
-                    ),
-                    (
-                        "est. credits",
-                        _bound(u, u.est_credits, 5),
-                        _bound(g, g.est_credits, 5),
-                        _MISSING if u.timed_out or g.timed_out else _cost_change(u.est_credits, g.est_credits),
-                    ),
-                ],
+                ["metric", "undersized", "right-sized", "change"],
+                _verdict_rows(by_side["undersized"], by_side["right_sized"]),
             )
         )
     return tables
 
 
-def read_report(
-    conn: Any,
-    *,
-    warehouse_name: str = queries.DEFAULT_WAREHOUSE,
-    hours: int = 6,
-) -> list[ReportTable]:
-    """Run each reconciliation query and return one :class:`ReportTable` per step.
+def _verdict_rows(undersized: SideResult, right_sized: SideResult) -> list[tuple[str, str, str, str]]:
+    """One row per metric: both measurements, then what changed."""
+    # A capped right-sized run has only lower bounds for spill, so no spill change can be claimed.
+    spill_known = not right_sized.timed_out
+    changes = {
+        "runtime_s": _speedup(undersized, right_sized),
+        "gb_spill_local": _spill_change(undersized.gb_spill_local, right_sized.gb_spill_local)
+        if spill_known
+        else _MISSING,
+        "gb_spill_remote": _spill_change(undersized.gb_spill_remote, right_sized.gb_spill_remote)
+        if spill_known
+        else _MISSING,
+        "est_credits": _cost_change(undersized, right_sized),
+    }
+    metrics = [
+        ("runtime (s)", "runtime_s", 1),
+        ("local spill (GB)", "gb_spill_local", 2),
+        ("remote spill (GB)", "gb_spill_remote", 2),
+        ("est. credits", "est_credits", 5),
+    ]
+    return [
+        (
+            label,
+            _measured(undersized, getattr(undersized, field), digits),
+            _measured(right_sized, getattr(right_sized, field), digits),
+            changes[field],
+        )
+        for label, field, digits in metrics
+    ]
+
+
+def read_report(conn: Any, *, objects: infra.DemoObjects, hours: int = 24) -> list[ReportTable]:
+    """Run each reconciliation query on the demo warehouse; one :class:`ReportTable` per step.
 
     Empty ``rows`` mean ACCOUNT_USAGE hasn't caught up yet — wait and rerun.
     """
-    queries.validate_identifier(warehouse_name, "warehouse")
     hours = int(hours)
-
     cur = conn.cursor()
     tables: list[ReportTable] = []
     try:
+        infra.require(cur, objects)
+        cur.execute(f"USE WAREHOUSE {objects.warehouse}")
         for step, title, sql in queries.REPORT_STEPS:
-            cur.execute(sql.format(hours=hours, wh=warehouse_name))
+            cur.execute(
+                sql.format(
+                    wh=objects.warehouse,
+                    hours=hours,
+                    tag=queries.QUERY_TAG_PREFIX,
+                    workload=queries.WORKLOAD_PREFIX,
+                )
+            )
             columns = [col[0] for col in cur.description]
             tables.append(ReportTable(step, title, columns, list(cur.fetchall())))
     finally:

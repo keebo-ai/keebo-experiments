@@ -46,9 +46,11 @@ Every experiment is a subcommand of the single `keebo-experiments` CLI.
   the Enterprise edition.
   Run: `poetry run keebo-experiments multi-cluster-billing --help`.
 - [**spillage**](./experiments/spillage/) — runs the same spill-forcing
-  workload on an undersized and a right-sized warehouse and prints the runtime,
-  local/remote disk spill, and cost side by side, live. Two scenarios: `local`
-  (spill to local SSD) and `remote` (spill past local SSD to remote storage).
+  workload on an undersized (X-Small) and a right-sized (Medium) warehouse and
+  prints the runtime, local/remote disk spill, and cost side by side, live. It
+  creates and drops its own warehouse, database, and data, and caps each run's
+  credits. Two scenarios: `local` (spill to local SSD) and `remote` (spill past
+  local SSD to remote storage).
   Run: `poetry run keebo-experiments spillage --help`.
 
 ## Repository layout
@@ -58,9 +60,11 @@ keebo-experiments/
 ├── common/        # shared machinery used by every experiment
 │   ├── cli.py         # the single `keebo-experiments` CLI (mounts each experiment)
 │   ├── credentials.py # resolve creds + open a connection (env / connections.toml / prompt)
+│   ├── dedicated.py   # find, claim, and drop the objects an experiment creates
 │   ├── render.py      # print report tables
 │   ├── tables.py      # the ReportTable data type
-│   └── snowflake.py   # Snowflake connection client (no click)
+│   ├── snowflake.py   # Snowflake connection client (no click)
+│   └── warehouses.py  # warehouse sizes and credit rates (Gen1 / Gen2)
 ├── experiments/   # one importable package per experiment (see experiments/README.md)
 │   └── <name>/
 │       ├── cli.py     # click commands, registered on common/cli.py
