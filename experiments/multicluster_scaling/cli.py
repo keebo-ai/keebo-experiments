@@ -6,8 +6,8 @@ A thin ``click`` wrapper over :mod:`core`. Mounted on the shared
 
     poetry run keebo-experiments multicluster-scaling --days 14
 
-Read-only: it only queries ``ACCOUNT_USAGE`` history and spends no warehouse
-credits of its own.
+Read-only: it only queries ``ACCOUNT_USAGE`` history. It creates nothing and
+runs no workload, but the two history queries do run on an existing warehouse.
 """
 
 from __future__ import annotations
@@ -50,12 +50,18 @@ def multicluster_scaling(
     run_warehouse: str | None,
     connection_name: str | None,
 ) -> None:
-    """Show how Snowflake's multi-cluster scaling behaved on your warehouses (read-only, no credits).
+    """Show how Snowflake's multi-cluster scaling behaved on your warehouses (read-only).
 
     Reads warehouse-event and query history and reports, per warehouse, how many
     clusters ran, how often extra ones spun up, how long they lived, and how busy
     they were — so you can see how multi-cluster auto-scaling actually works on
     your own workload.
+
+    WARNING: this uses a little real compute. It creates nothing, but its two
+    ACCOUNT_USAGE queries run on your default warehouse (or --run-warehouse),
+    typically for seconds. If that warehouse has to resume, it bills Snowflake's
+    60-second minimum at its size (about 0.017 credits on an X-Small); if it is
+    already running, the queries add almost nothing.
     """
     try:
         with open_connection(connection_name) as conn:

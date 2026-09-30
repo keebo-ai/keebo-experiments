@@ -1,8 +1,9 @@
 # How multi-cluster scaling works
 
-**Cost: $0.** This experiment only reads history from `SNOWFLAKE.ACCOUNT_USAGE`.
-It never creates a warehouse or runs a workload, so it spends no warehouse
-credits of its own.
+**Cost: close to zero.** This experiment only reads history from
+`SNOWFLAKE.ACCOUNT_USAGE`. It never creates a warehouse or runs a workload of its
+own. Its two read queries do need a running warehouse, though (see
+[Before you run it](#before-you-run-it)).
 
 ## What it demonstrates
 
@@ -26,6 +27,17 @@ For each warehouse it:
 4. Prints the distributions and a plain-language description of the pattern
    (short-lived vs long-running, busy vs idle).
 
+## Before you run it
+
+- **Cost.** The two `ACCOUNT_USAGE` queries run on your role's default warehouse,
+  or on the one you name with `--run-warehouse`, and usually finish in seconds.
+  If that warehouse is suspended, resuming it bills Snowflake's 60-second
+  minimum: about 0.017 credits on an X-Small. If it's already running, the
+  queries add nothing noticeable. Pick an X-Small for `--run-warehouse`.
+- **Nothing to clean up.** The experiment creates no objects, so there is no
+  `cleanup` command.
+- **Access.** Your role needs access to the `SNOWFLAKE.ACCOUNT_USAGE` schema.
+
 ## How to run
 
 Set your Snowflake connection (see `.env.example`, or pass `--connection NAME`),
@@ -40,8 +52,7 @@ poetry run keebo-experiments multicluster-scaling --warehouse ANALYTICS_WH --war
 poetry run keebo-experiments multicluster-scaling --run-warehouse MY_XS_WH
 ```
 
-Your role needs access to the `SNOWFLAKE.ACCOUNT_USAGE` schema. `ACCOUNT_USAGE`
-views can lag real time by up to ~45 minutes, so very recent activity may not
+`ACCOUNT_USAGE` views can lag real time by up to ~45 minutes, so very recent activity may not
 appear yet.
 
 ## What to expect

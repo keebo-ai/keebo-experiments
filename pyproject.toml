@@ -1,17 +1,17 @@
 [project]
 name = "keebo-experiments"
-version = "0.2.0"
+version = "0.4.0"
 description = "Runnable experiments demonstrating concepts from the Keebo blog (https://keebo.ai/blog)."
 authors = [{ name = "Keebo", email = "hello@keebo.ai" }]
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.14,<4.0"
 dependencies = [
-    "click>=8.1",
+    "click>=8.5.0",
     # secure-local-storage pulls in keyring so the connector can cache SSO/MFA
     # tokens — one approval per session instead of a prompt on every connect.
-    "snowflake-connector-python[secure-local-storage]>=3.12",
-    "python-dotenv>=1.0",
+    "snowflake-connector-python[secure-local-storage]>=4.7.5",
+    "python-dotenv>=1.2.3",
 ]
 
 [project.urls]
@@ -35,8 +35,8 @@ packages = [
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.1"
 ruff = "^0.16"
-commitizen = "^4.13"
-mockito = "^1.5"
+commitizen = "^4.18"
+mockito = "^2.0"
 
 [tool.ruff]
 target-version = "py314"
