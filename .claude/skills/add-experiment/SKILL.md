@@ -50,9 +50,10 @@ density, and naming.
 
 ```
 experiments/<pkg>/
-├── cli.py          # click group: run / report / cleanup (only file importing click)
+├── cli.py          # click group: [setup /] run / report / cleanup (only file importing click)
 ├── core/
 │   ├── queries.py  # SQL text + constants (DEFAULT_WAREHOUSE, sizes, etc.)
+│   ├── infra.py    # optional: setup + cleanup of the objects it owns
 │   ├── run.py      # the domain logic: takes `conn` first, raises ValueError
 │   └── report.py   # builds ReportTable(s) from results (common/tables.py)
 └── README.md
@@ -78,8 +79,10 @@ Checklist for the code:
       `common/credentials.py`, and `echo_table` from `common/render.py`. It
       converts `ValueError` to `click.ClickException`.
 - [ ] Use a **dedicated** warehouse or resource with a `DEFAULT_WAREHOUSE`
-      constant and a `--warehouse` override. Never alter or drop objects the
-      experiment didn't create.
+      constant and a `--warehouse` override. Give it an owner comment and check
+      and drop it with `common/dedicated.py` (`claim` / `drop`), so it never alters or drops
+      objects the experiment didn't create. Sizes and rates come from
+      `common/warehouses.py`.
 - [ ] Include a `cleanup` command that drops everything the experiment created.
 - [ ] The group docstring has a credentials paragraph and a
       `WARNING: this uses real compute. ...` line with the cost estimate.
