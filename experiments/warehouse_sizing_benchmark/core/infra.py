@@ -93,7 +93,7 @@ def setup(conn: Any, objects: BenchmarkObjects, *, generation: str = "1", echo: 
             )
 
         if existing_database is None:
-            echo(f"Creating database {objects.database} (transient: no Time Travel or Fail-safe storage) ...")
+            echo(f"Creating database {objects.database} (transient, so no Time Travel or Fail-safe storage) ...")
             cur.execute(
                 f"CREATE TRANSIENT DATABASE {objects.database} "
                 f"DATA_RETENTION_TIME_IN_DAYS = 0 COMMENT = '{queries.OWNER_COMMENT}'"
@@ -118,7 +118,7 @@ def setup(conn: Any, objects: BenchmarkObjects, *, generation: str = "1", echo: 
         finally:
             # Silent: the warehouse may never have resumed if everything already existed.
             dedicated.suspend_quietly(cur, objects.warehouse)
-        echo("\nReady. Next:  keebo-experiments warehouse-sizing run")
+        echo("\nReady. Next, run:  keebo-experiments warehouse-sizing run")
     finally:
         cur.close()
 
@@ -149,7 +149,7 @@ def require_objects(cur: Any, objects: BenchmarkObjects, *, echo: Echo = _silent
         raise ValueError(f"database {objects.database} doesn't exist. {_NOT_SET_UP}")
     generation = warehouses.generation_of(warehouse)
     if generation is None:
-        echo(f"Note: {objects.warehouse} doesn't report its generation, so costs assume Gen2 (the pricier rate).")
+        echo(f"{objects.warehouse} doesn't report its generation, so costs are figured at the Gen2 rate to be safe.")
         return "2"
     return generation
 
@@ -201,9 +201,9 @@ def cleanup(conn: Any, objects: BenchmarkObjects, *, echo: Echo = _silent) -> No
 def _generate_table(cur: Any, objects: BenchmarkObjects, echo: Echo) -> None:
     """Generate the fallback table on a Medium with its own cap, then go back to X-Small."""
     echo(
-        f"This role can't read {queries.DEFAULT_TABLE}, so generating the same {queries.SOURCE_ROWS:,} rows "
-        f"as {objects.generated_table} instead (up to {queries.GENERATE_TIMEOUT_SECONDS // 60} minutes on a "
-        f"{warehouses.SIZE_LABEL[queries.GENERATE_SIZE]}) ..."
+        f"This role can't read {queries.DEFAULT_TABLE}, so building {objects.generated_table} with the same "
+        f"{queries.SOURCE_ROWS:,} rows instead. It takes up to {queries.GENERATE_TIMEOUT_SECONDS // 60} minutes "
+        f"on a {warehouses.SIZE_LABEL[queries.GENERATE_SIZE]} ..."
     )
     cur.execute(
         f"ALTER WAREHOUSE {objects.warehouse} SET WAREHOUSE_SIZE = {queries.GENERATE_SIZE} "
@@ -232,6 +232,6 @@ def _check_account_usage(cur: Any, echo: Echo) -> None:
         cur.fetchall()
     except Exception:  # any failure means the same thing here
         echo(
-            "  Note: this role can't read SNOWFLAKE.ACCOUNT_USAGE. `run` works without it; "
-            "`report` needs it (ACCOUNTADMIN, or IMPORTED PRIVILEGES on the SNOWFLAKE database)."
+            "  This role can't read SNOWFLAKE.ACCOUNT_USAGE. That's fine for `run`, but `report` needs it "
+            "(ACCOUNTADMIN, or IMPORTED PRIVILEGES on the SNOWFLAKE database)."
         )

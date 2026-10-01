@@ -291,7 +291,7 @@ REPORT_STEPS: list[tuple[int, str, str]] = [
     ),
     (
         15,
-        "The authoritative billed total for the warehouse: every run and setup in the window (lags up to 3h)",
+        "Billed total for the warehouse: every run and setup in the window (can lag up to 3h)",
         """
         SELECT SUM(credits_used)         AS total_billed_credits,
                SUM(credits_used_compute) AS compute_credits,

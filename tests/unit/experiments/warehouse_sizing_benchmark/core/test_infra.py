@@ -136,7 +136,7 @@ def test_require_assumes_gen2_when_the_account_does_not_say(account):
     cursor, _conn = account(generation=None)
     messages: list[str] = []
     assert infra.require(cursor, OBJECTS, echo=messages.append).generation == "2"
-    assert "assume Gen2" in messages[0]
+    assert "at the Gen2 rate to be safe" in messages[0]
 
 
 @pytest.mark.parametrize(

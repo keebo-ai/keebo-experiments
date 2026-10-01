@@ -58,7 +58,7 @@ def test_setup_pins_the_generation(runner, account):
     assert any("GENERATION = '2'" in s for s in cursor.executed)
 
 
-def test_run_two_sizes_prints_live_results_and_a_verdict(runner, account):
+def test_run_two_sizes_prints_results_side_by_side(runner, account):
     cursor, conn = account()
     _stub_connection(conn)
 
@@ -66,9 +66,9 @@ def test_run_two_sizes_prints_live_results_and_a_verdict(runner, account):
 
     assert result.exit_code == 0, result.output
     assert any("SET WAREHOUSE_SIZE = MEDIUM" in s for s in cursor.executed)
-    assert "--- Live results" in result.output
-    assert "--- The verdict (Medium vs X-Small) ---" in result.output
-    assert "Credits used by this run: about" in result.output
+    assert "--- Results by size" in result.output
+    assert "--- X-Small vs Medium ---" in result.output
+    assert "This run used about" in result.output
 
 
 def test_run_full_sweep_by_default(runner, account):
@@ -77,7 +77,7 @@ def test_run_full_sweep_by_default(runner, account):
     result = _invoke(runner, "run", "--runs", "1")
     assert result.exit_code == 0, result.output
     assert sum("SET WAREHOUSE_SIZE =" in s and "XSMALL STATEMENT" not in s for s in cursor.executed) >= 5
-    assert "The verdict" not in result.output
+    assert " vs " not in result.output
     assert "Cheapest per query:" in result.output
 
 
@@ -94,7 +94,7 @@ def test_report_prints_every_step_of_the_latest_run(runner, account):
     _stub_connection(conn)
     result = _invoke(runner, "report")
     assert result.exit_code == 0, result.output
-    assert "Latest run ACCOUNT_USAGE has caught up with: 20260930-120000." in result.output
+    assert "Reporting run 20260930-120000, the latest one ACCOUNT_USAGE has." in result.output
     assert "Step 10." in result.output and "Step 16." in result.output
 
 
@@ -103,7 +103,7 @@ def test_report_with_no_runs_yet(runner, account):
     _stub_connection(conn)
     result = _invoke(runner, "report")
     assert result.exit_code == 0, result.output
-    assert "No benchmark runs on SIZING_BENCHMARK_WH" in result.output
+    assert "doesn't show any runs on SIZING_BENCHMARK_WH" in result.output
 
 
 def test_names_are_upper_cased(runner, account):

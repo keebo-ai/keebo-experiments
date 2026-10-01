@@ -98,12 +98,11 @@ def sweep_sizes(
         timeouts = queries.query_timeouts(
             [keyword for keyword, _, _ in sizes], generation=state.generation, runs=runs, max_credits=max_credits
         )
-        echo(f"Run id: {run_id} (how `warehouse-sizing report` finds this run)")
+        echo(f"Run id: {run_id} (pass it to `warehouse-sizing report --run-id`)")
         echo(f"Data: {state.table}")
         echo(
-            f"Cost cap: at most {max_credits:g} credits of Gen{state.generation} compute, 60-second minimums "
-            f"included ({len(sizes)} sizes x {runs} runs; a query on the largest size stops after "
-            f"{min(timeouts.values())}s)."
+            f"Cost cap: {max_credits:g} credits at the Gen{state.generation} rate, including each size's "
+            f"60-second minimum. Queries on the largest size stop after {min(timeouts.values())}s."
         )
 
         # Step 2: point a session variable at the table.
@@ -136,7 +135,7 @@ def sweep_sizes(
             _reset_for_idle(cur, objects.warehouse)
 
         echo(
-            "\nSweep complete. ACCOUNT_USAGE lags a few minutes (up to ~45), so wait, then run:  "
+            "\nDone. ACCOUNT_USAGE can take up to 45 minutes to catch up, so give it a bit, then run:  "
             "keebo-experiments warehouse-sizing report"
         )
     finally:
@@ -226,7 +225,7 @@ def _read_spill(cur: Any, query_id: str, *, sleep: Callable[[float], None], echo
         on_error=lambda exc: echo(f"  (couldn't read spill: {exc})"),
     )
     if stats is None:
-        echo("  (spill not available yet — `warehouse-sizing report` reads it from ACCOUNT_USAGE later)")
+        echo("  (spill isn't available yet; `warehouse-sizing report` will have it later)")
         return {}
     echo(f"  spill: {_gb(stats['bytes_local'])} GB local, {_gb(stats['bytes_remote'])} GB remote")
     return stats

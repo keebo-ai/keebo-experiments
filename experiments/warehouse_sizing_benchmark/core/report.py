@@ -33,11 +33,11 @@ def _measured(result: SizeResult, value: float | None, digits: int) -> str:
 # Live results
 # --------------------------------------------------------------------------- #
 def live_tables(results: list[SizeResult]) -> list[ReportTable]:
-    """The per-size table for a sweep, plus the verdict when exactly two sizes ran."""
+    """The per-size table for a sweep, plus a side-by-side when exactly two sizes ran."""
     tables = [
         ReportTable(
             None,
-            "Live results (spill from the cold run; `report` has the billed numbers)",
+            "Results by size (spill is from the cold run)",
             [
                 "size",
                 "credits_per_hr",
@@ -70,15 +70,15 @@ def live_tables(results: list[SizeResult]) -> list[ReportTable]:
         tables.append(
             ReportTable(
                 None,
-                f"The verdict ({larger.label} vs {smaller.label})",
+                f"{smaller.label} vs {larger.label}",
                 ["metric", smaller.label, larger.label, "change"],
-                _verdict_rows(smaller, larger),
+                _side_by_side_rows(smaller, larger),
             )
         )
     return tables
 
 
-def _verdict_rows(smaller: SizeResult, larger: SizeResult) -> list[tuple[str, str, str, str]]:
+def _side_by_side_rows(smaller: SizeResult, larger: SizeResult) -> list[tuple[str, str, str, str]]:
     """One row per metric: both measurements, then what changed going to the larger size."""
     # A capped larger size has only lower bounds for spill, so no spill change can be claimed.
     spill_known = not larger.timed_out
@@ -94,7 +94,7 @@ def _verdict_rows(smaller: SizeResult, larger: SizeResult) -> list[tuple[str, st
         ("local spill (GB)", "gb_spill_local", 2),
         ("remote spill (GB)", "gb_spill_remote", 2),
         ("credits per query", "query_credits", 5),
-        ("credits billed, this run", "billed_credits", 5),
+        ("credits billed for this run", "billed_credits", 5),
     ]
     return [
         (
@@ -140,8 +140,8 @@ def summary_lines(results: list[SizeResult]) -> list[str]:
     total = sum(r.billed_credits for r in results)
     amount = "at least" if any(r.timed_out for r in results) else "about"
     lines = [
-        f"Credits used by this run: {amount} {total:.3f} (each size bills at least 60 seconds when it "
-        "resumes). For the exact bill, run `warehouse-sizing report` in an hour or two."
+        f"This run used {amount} {total:.3f} credits. Each size bills at least 60 seconds when it resumes. "
+        "For the exact bill, run `warehouse-sizing report` in an hour or two."
     ]
     finished = [r for r in results if not r.timed_out]
     if len(finished) > 1:
@@ -157,20 +157,18 @@ def _calibration_hints(smaller: SizeResult, larger: SizeResult) -> list[str]:
     hints = []
     if smaller.timed_out:
         hints.append(
-            f"Note: the {smaller.label} hit the cost cap, so its numbers are lower bounds. "
-            "Raise --max-credits for a complete run."
+            f"The {smaller.label} hit the cost cap, so its numbers are a floor. Raise --max-credits to let it finish."
         )
     if smaller.gb_spill_local is not None and not smaller.timed_out and not smaller.gb_spill_local:
         hints.append(
-            f"Note: the {smaller.label} didn't spill, so there's no spill to remove. Use a smaller first --size, "
-            "or a bigger --table (e.g. SNOWFLAKE_SAMPLE_DATA.TPCH_SF1000.LINEITEM, if your role can read the "
-            "sample data)."
+            f"The {smaller.label} didn't spill, so there's nothing to compare. Try a smaller first --size, or a "
+            "bigger --table like SNOWFLAKE_SAMPLE_DATA.TPCH_SF1000.LINEITEM if you can read the sample data."
         )
     # A little residual spill on the larger size still makes the point; flag it only when it's a real share.
     if larger.gb_spill_local and not larger.timed_out and larger.gb_spill_local >= 0.25 * (smaller.gb_spill_local or 0):
         hints.append(
-            f"Note: the {larger.label} spilled too, so the contrast is weaker. Pick a bigger second --size "
-            "or a smaller --table."
+            f"The {larger.label} spilled too, so the difference is smaller than it could be. Try a bigger second "
+            "--size or a smaller --table."
         )
     return hints
 

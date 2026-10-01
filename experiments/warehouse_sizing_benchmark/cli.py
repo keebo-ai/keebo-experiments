@@ -46,19 +46,19 @@ def warehouse_sizing() -> None:
     \b
     Typical flow:
         keebo-experiments warehouse-sizing setup     # create the warehouse and database
-        keebo-experiments warehouse-sizing run       # sweep every size; results print live
+        keebo-experiments warehouse-sizing run       # run the query on every size
         keebo-experiments warehouse-sizing report    # billed credits from ACCOUNT_USAGE (wait a few min)
         keebo-experiments warehouse-sizing cleanup   # drop everything setup created
 
     \b
-    Compare just two sizes, e.g. to show what spill costs:
+    To see what spill costs, compare two sizes:
         keebo-experiments warehouse-sizing run --size xsmall --size medium --runs 1
 
-    Everything runs on a warehouse and database the benchmark creates and marks
-    as its own; it never touches an object it didn't create. It reads
-    Snowflake's sample data (TPCH_SF100.LINEITEM), or a generated copy if the
-    role can't read it. The role needs CREATE WAREHOUSE and CREATE DATABASE,
-    plus ACCOUNT_USAGE access for report.
+    Everything runs on a warehouse and database the benchmark creates, and it
+    won't touch anything it didn't create. It reads Snowflake's sample data
+    (TPCH_SF100.LINEITEM), or builds its own copy if your role can't read it.
+    The role needs CREATE WAREHOUSE and CREATE DATABASE, plus ACCOUNT_USAGE
+    access for report.
 
     Credentials: pass --connection NAME to use an entry from Snowflake's
     connections.toml, or set SNOWFLAKE_ACCOUNT / SNOWFLAKE_USER /
@@ -66,11 +66,10 @@ def warehouse_sizing() -> None:
     environment or a .env file (see .env.example). Anything missing is prompted
     for.
 
-    WARNING: this uses real compute. The full X-Small to 2X-Large sweep bills
-    about 1.3 credits against TPCH_SF100. Every run's compute credits are capped
-    at --max-credits (default 3), 60-second minimums included, by warehouse
-    statement timeouts priced at the warehouse's generation. setup costs about
-    0.02 credits, or at most 0.5 if it has to generate the table.
+    WARNING: this runs real queries and costs credits. A full sweep (X-Small to
+    2X-Large) costs about 1.3 credits on TPCH_SF100. run stops at --max-credits
+    (3 by default), including each size's 60-second minimum. setup costs about
+    0.02 credits, or up to 0.5 if it has to build the table.
     """
 
 
@@ -82,7 +81,7 @@ def warehouse_sizing() -> None:
     type=click.Choice(warehouses.GENERATIONS),
     default="1",
     show_default=True,
-    help="Warehouse generation to pin. Gen2 bills 1.35x per hour; the cost cap accounts for it.",
+    help="Warehouse generation. Gen2 costs 1.35x per hour, and the cost cap accounts for it.",
 )
 @connection_option
 def setup(warehouse_name: str, database: str, generation: str, connection_name: str | None) -> None:
@@ -109,7 +108,7 @@ def setup(warehouse_name: str, database: str, generation: str, connection_name: 
     "sizes",
     multiple=True,
     type=click.Choice(queries.SIZE_KEYWORDS, case_sensitive=False),
-    help="Restrict the sweep to these sizes (repeatable). Defaults to all six. Pick two for a side-by-side verdict.",
+    help="Restrict the sweep to these sizes (repeatable). Defaults to all six. Pick two to see them side by side.",
 )
 @click.option(
     "--runs",
@@ -123,7 +122,7 @@ def setup(warehouse_name: str, database: str, generation: str, connection_name: 
     default=queries.DEFAULT_MAX_CREDITS,
     show_default=True,
     type=click.FloatRange(min=0.05, max=50),
-    help="Hard cap on this run's compute credits, 60-second minimums included.",
+    help="Stop the run at this many credits, including each size's 60-second minimum.",
 )
 @_WAREHOUSE_OPTION
 @_DATABASE_OPTION
@@ -137,7 +136,7 @@ def run(
     database: str,
     connection_name: str | None,
 ) -> None:
-    """Run the fixed query across each size (Steps 4-9) and show the results live."""
+    """Run the query on each size (Steps 4-9) and print the results when it's done."""
     selected = {size.upper() for size in sizes} if sizes else set(queries.SIZE_KEYWORDS)
     chosen_sizes = [row for row in queries.SIZES if row[0] in selected]
     try:
@@ -176,7 +175,7 @@ def report(hours: int, run_id: str | None, warehouse_name: str, database: str, c
     """Read timings and credits back from ACCOUNT_USAGE for one run (Steps 10-16).
 
     ACCOUNT_USAGE lags a few minutes (up to ~45); QUERY_ATTRIBUTION_HISTORY can
-    trail several hours. Empty results mean it hasn't caught up — wait and rerun.
+    trail several hours. Empty results mean it hasn't caught up yet. Wait and rerun.
     Run it before cleanup: it runs on the benchmark warehouse.
     """
     try:
@@ -186,12 +185,12 @@ def report(hours: int, run_id: str | None, warehouse_name: str, database: str, c
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     if reported is None:
-        click.echo(f"No benchmark runs on {objects.warehouse} in the last {hours} hours yet (ACCOUNT_USAGE may lag).")
+        click.echo(f"ACCOUNT_USAGE doesn't show any runs on {objects.warehouse} in the last {hours} hours yet.")
         return
     if run_id is None:
         click.echo(
-            f"Latest run ACCOUNT_USAGE has caught up with: {reported}. If that isn't the id `run` printed, "
-            "wait a few minutes and rerun, or pass --run-id."
+            f"Reporting run {reported}, the latest one ACCOUNT_USAGE has. If that's not the run you just did, "
+            "give it a few minutes and try again, or pass --run-id."
         )
     else:
         click.echo(f"Run {reported}:")

@@ -19,8 +19,8 @@ XSMALL = _size("XSMALL", "X-Small", 1.0, [74.0], 15.13)
 MEDIUM = _size("MEDIUM", "Medium", 4.0, [9.0], 0.0)
 
 
-def _changes(verdict):
-    return {row[0]: row[3] for row in verdict.rows}
+def _changes(side_by_side):
+    return {row[0]: row[3] for row in side_by_side.rows}
 
 
 def test_live_table_lists_every_size():
@@ -31,31 +31,31 @@ def test_live_table_lists_every_size():
     assert table.rows[2][4] == "4.1"  # warm median
 
 
-def test_two_sizes_get_a_verdict_smaller_first():
-    _table, verdict = report.live_tables([MEDIUM, XSMALL])
-    assert verdict.title == "The verdict (Medium vs X-Small)"
-    assert verdict.columns == ["metric", "X-Small", "Medium", "change"]
-    assert _changes(verdict) == {
+def test_two_sizes_go_side_by_side_smaller_first():
+    _table, side_by_side = report.live_tables([MEDIUM, XSMALL])
+    assert side_by_side.title == "X-Small vs Medium"
+    assert side_by_side.columns == ["metric", "X-Small", "Medium", "change"]
+    assert _changes(side_by_side) == {
         "runtime, cold (s)": "8.2x faster",
         "local spill (GB)": "eliminated",
         "remote spill (GB)": "—",
         "credits per query": "51% cheaper",
         # The Medium's 9s rounds up to Snowflake's 60-second minimum on this run's bill.
-        "credits billed, this run": "224% pricier",
+        "credits billed for this run": "224% pricier",
     }
 
 
 def test_a_capped_size_is_a_lower_bound():
     capped = _size("XSMALL", "X-Small", 1.0, [2700.0], 30.0, timed_out=True)
-    table, verdict = report.live_tables([capped, MEDIUM])
+    table, side_by_side = report.live_tables([capped, MEDIUM])
     assert table.rows[0][3] == "2700.0+"
-    assert _changes(verdict)["runtime, cold (s)"] == "at least 300.0x faster"
-    assert _changes(verdict)["credits per query"] == "—"
+    assert _changes(side_by_side)["runtime, cold (s)"] == "at least 300.0x faster"
+    assert _changes(side_by_side)["credits per query"] == "—"
 
 
 def test_summary_totals_credits_and_names_the_cheapest():
     lines = report.summary_lines([XSMALL, MEDIUM])
-    assert lines[0].startswith("Credits used by this run: about 0.087 ")  # 0.02056 + 0.06667
+    assert lines[0].startswith("This run used about 0.087 credits.")  # 0.02056 + 0.06667
     assert lines[1] == "Cheapest per query: Medium (0.01000 credits)."
 
 
