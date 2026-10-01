@@ -47,7 +47,7 @@ def warehouse_sizing() -> None:
     Typical flow:
         keebo-experiments warehouse-sizing setup     # create the warehouse and database
         keebo-experiments warehouse-sizing run       # run the query on every size
-        keebo-experiments warehouse-sizing report    # billed credits from ACCOUNT_USAGE (wait a few min)
+        keebo-experiments warehouse-sizing report    # billed numbers from ACCOUNT_USAGE (it lags, so wait a bit)
         keebo-experiments warehouse-sizing cleanup   # drop everything setup created
 
     \b
@@ -85,7 +85,7 @@ def warehouse_sizing() -> None:
 )
 @connection_option
 def setup(warehouse_name: str, database: str, generation: str, connection_name: str | None) -> None:
-    """Create the benchmark warehouse and database (Steps 1-3). Safe to rerun."""
+    """Create the benchmark warehouse and database (Steps 1 and 3). Safe to rerun."""
     try:
         objects = infra.BenchmarkObjects.named(warehouse_name, database)
         with open_connection(connection_name) as conn:
@@ -99,15 +99,15 @@ def setup(warehouse_name: str, database: str, generation: str, connection_name: 
     "--table",
     default=None,
     help=(
-        "Fully-qualified table to query instead of the sample TPCH_SF100 "
-        "(or setup's generated copy). TPCH_SF1000 gives a sharper curve at ~10x cost."
+        "Fully-qualified table to query instead of the sample TPCH_SF100 (or setup's generated copy). "
+        "TPCH_SF1000 gives a sharper curve at about 10x the cost, so raise --max-credits to 15 with it."
     ),
 )
 @click.option(
     "--size",
     "sizes",
     multiple=True,
-    type=click.Choice(queries.SIZE_KEYWORDS, case_sensitive=False),
+    type=click.Choice(warehouses.SIZE_KEYWORDS, case_sensitive=False),
     help="Restrict the sweep to these sizes (repeatable). Defaults to all six. Pick two to see them side by side.",
 )
 @click.option(
@@ -136,9 +136,9 @@ def run(
     database: str,
     connection_name: str | None,
 ) -> None:
-    """Run the query on each size (Steps 4-9) and print the results when it's done."""
-    selected = {size.upper() for size in sizes} if sizes else set(queries.SIZE_KEYWORDS)
-    chosen_sizes = [row for row in queries.SIZES if row[0] in selected]
+    """Run the query on each size (Steps 2-9) and print the results when it's done."""
+    selected = {size.upper() for size in sizes} if sizes else set(warehouses.SIZE_KEYWORDS)
+    chosen_sizes = [keyword for keyword in warehouses.SIZE_KEYWORDS if keyword in selected]
     try:
         objects = infra.BenchmarkObjects.named(warehouse_name, database)
         with open_connection(connection_name) as conn:
@@ -174,8 +174,9 @@ def run(
 def report(hours: int, run_id: str | None, warehouse_name: str, database: str, connection_name: str | None) -> None:
     """Read timings and credits back from ACCOUNT_USAGE for one run (Steps 10-16).
 
-    ACCOUNT_USAGE lags a few minutes (up to ~45); QUERY_ATTRIBUTION_HISTORY can
-    trail several hours. Empty results mean it hasn't caught up yet. Wait and rerun.
+    Query history can take up to 45 minutes to show up, billing up to 3 hours,
+    and per-query credits up to 8. Empty results mean it hasn't caught up yet.
+    Wait and rerun.
     Run it before cleanup: it runs on the benchmark warehouse.
     """
     try:
@@ -185,7 +186,10 @@ def report(hours: int, run_id: str | None, warehouse_name: str, database: str, c
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     if reported is None:
-        click.echo(f"ACCOUNT_USAGE doesn't show any runs on {objects.warehouse} in the last {hours} hours yet.")
+        click.echo(
+            f"ACCOUNT_USAGE doesn't show any runs on {objects.warehouse} in the last {hours} hours yet. "
+            "It can take up to 45 minutes. Runs from before run ids aren't reported."
+        )
         return
     if run_id is None:
         click.echo(

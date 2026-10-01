@@ -1,4 +1,4 @@
-"""Create, check, and drop the benchmark's own Snowflake objects (Steps 1-3 and 17).
+"""Create, check, and drop the benchmark's own Snowflake objects (Steps 1, 3, and 17).
 
 ``setup`` creates:
 
@@ -19,17 +19,16 @@ raise ``ValueError`` and the CLI turns them into clean messages.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
 from common import dedicated, warehouses
+from common.snowflake import is_statement_timeout, rows
 from common.sql import validate_identifier, validate_name
 from experiments.warehouse_sizing_benchmark.core import queries
 
 Echo = Callable[[str], None]
-
-# Snowflake error 000630: the statement hit its STATEMENT_TIMEOUT_IN_SECONDS.
-_TIMEOUT_ERRNO = 630
 
 
 def _silent(_message: str) -> None:
@@ -64,7 +63,7 @@ class BenchmarkState:
 
 
 def setup(conn: Any, objects: BenchmarkObjects, *, generation: str = "1", echo: Echo = _silent) -> None:
-    """Create the warehouse and database, and the table if the sample data isn't readable (Steps 1-3)."""
+    """Create the warehouse and database, and the table if the sample data isn't readable (Steps 1 and 3)."""
     if generation not in warehouses.GENERATIONS:
         raise ValueError(f"generation must be one of {', '.join(warehouses.GENERATIONS)}, got {generation!r}")
     cur = conn.cursor()
@@ -73,10 +72,10 @@ def setup(conn: Any, objects: BenchmarkObjects, *, generation: str = "1", echo: 
         echo(f"Using role {cur.fetchall()[0][0]} (it needs CREATE WAREHOUSE and CREATE DATABASE).")
 
         # Check both names before creating anything, so a name that's taken leaves nothing behind.
-        existing = dedicated.claim(cur, "WAREHOUSE", objects.warehouse, comment=queries.OWNER_COMMENT)
-        existing_database = dedicated.claim(cur, "DATABASE", objects.database, comment=queries.OWNER_COMMENT)
-        if existing is not None:
-            reported = warehouses.generation_of(existing)
+        warehouse_row = dedicated.claim(cur, "WAREHOUSE", objects.warehouse, comment=queries.OWNER_COMMENT)
+        database_row = dedicated.claim(cur, "DATABASE", objects.database, comment=queries.OWNER_COMMENT)
+        if warehouse_row is not None:
+            reported = warehouses.generation_of(warehouse_row)
             if reported and reported != generation:
                 raise ValueError(
                     f"warehouse {objects.warehouse} already exists as Gen{reported}. Run `cleanup` first, "
@@ -92,7 +91,7 @@ def setup(conn: Any, objects: BenchmarkObjects, *, generation: str = "1", echo: 
                 f"COMMENT = '{queries.OWNER_COMMENT}'"
             )
 
-        if existing_database is None:
+        if database_row is None:
             echo(f"Creating database {objects.database} (transient, so no Time Travel or Fail-safe storage) ...")
             cur.execute(
                 f"CREATE TRANSIENT DATABASE {objects.database} "
@@ -101,11 +100,7 @@ def setup(conn: Any, objects: BenchmarkObjects, *, generation: str = "1", echo: 
         else:
             echo(f"Reusing database {objects.database}.")
 
-        # X-Small, with setup's own timeout, caps what generating the table can cost.
-        cur.execute(
-            f"ALTER WAREHOUSE {objects.warehouse} SET WAREHOUSE_SIZE = XSMALL "
-            f"STATEMENT_TIMEOUT_IN_SECONDS = {queries.SETUP_TIMEOUT_SECONDS}"
-        )
+        set_idle(cur, objects.warehouse)
         cur.execute(f"USE WAREHOUSE {objects.warehouse}")
         try:
             if table_exists(cur, queries.DEFAULT_TABLE):
@@ -132,12 +127,14 @@ def require(cur: Any, objects: BenchmarkObjects, *, table: str | None = None, ec
     ``table`` is an explicit ``--table``; without one, the sample data is read if
     it's readable, else the generated copy.
     """
-    generation = require_objects(cur, objects, echo=echo)
+    generation = require_warehouse(cur, objects, echo=echo)
+    if dedicated.claim(cur, "DATABASE", objects.database, comment=queries.OWNER_COMMENT) is None:
+        raise ValueError(f"database {objects.database} doesn't exist. {_NOT_SET_UP}")
     return BenchmarkState(generation=generation, table=_source_table(cur, objects, table))
 
 
-def require_objects(cur: Any, objects: BenchmarkObjects, *, echo: Echo = _silent) -> str:
-    """Check the warehouse and database exist and are ours; return the warehouse generation.
+def require_warehouse(cur: Any, objects: BenchmarkObjects, *, echo: Echo = _silent) -> str:
+    """Check the warehouse exists and is ours; return its generation ('1' or '2').
 
     A generation the account doesn't report is taken as '2', the pricier one, so
     the cost cap errs on the safe side (and ``echo`` says so).
@@ -145,8 +142,6 @@ def require_objects(cur: Any, objects: BenchmarkObjects, *, echo: Echo = _silent
     warehouse = dedicated.claim(cur, "WAREHOUSE", objects.warehouse, comment=queries.OWNER_COMMENT)
     if warehouse is None:
         raise ValueError(f"warehouse {objects.warehouse} doesn't exist. {_NOT_SET_UP}")
-    if dedicated.claim(cur, "DATABASE", objects.database, comment=queries.OWNER_COMMENT) is None:
-        raise ValueError(f"database {objects.database} doesn't exist. {_NOT_SET_UP}")
     generation = warehouses.generation_of(warehouse)
     if generation is None:
         echo(f"{objects.warehouse} doesn't report its generation, so costs are figured at the Gen2 rate to be safe.")
@@ -183,8 +178,7 @@ def table_exists(cur: Any, table: str) -> bool:
         cur.execute(f"SHOW TABLES LIKE '{name}' IN SCHEMA {database}.{schema}")
     except Exception:  # "does not exist or not authorized"
         return False
-    columns = [column[0].lower() for column in cur.description]
-    return any(dict(zip(columns, row, strict=False)).get("name") == name for row in cur.fetchall())
+    return any(row.get("name") == name for row in rows(cur))
 
 
 def cleanup(conn: Any, objects: BenchmarkObjects, *, echo: Echo = _silent) -> None:
@@ -212,17 +206,28 @@ def _generate_table(cur: Any, objects: BenchmarkObjects, echo: Echo) -> None:
     try:
         cur.execute(queries.GENERATED_TABLE_SQL.format(table=objects.generated_table, rows=queries.SOURCE_ROWS))
     except Exception as exc:
-        if getattr(exc, "errno", None) != _TIMEOUT_ERRNO:
+        if not is_statement_timeout(exc):
             raise
         raise ValueError(
             f"generating {objects.generated_table} hit its {queries.GENERATE_TIMEOUT_SECONDS}s cap, so nothing "
             "was created. Mount the sample data instead (see the README's Requirements), or pass --table to `run`."
         ) from exc
     finally:
-        cur.execute(
-            f"ALTER WAREHOUSE {objects.warehouse} SET WAREHOUSE_SIZE = XSMALL "
-            f"STATEMENT_TIMEOUT_IN_SECONDS = {queries.SETUP_TIMEOUT_SECONDS}"
-        )
+        reset_to_idle(cur, objects.warehouse)
+
+
+def set_idle(cur: Any, warehouse: str) -> None:
+    """Put the warehouse back to X-Small with the idle timeout and its auto-suspend settings."""
+    cur.execute(
+        f"ALTER WAREHOUSE {warehouse} SET WAREHOUSE_SIZE = XSMALL "
+        f"STATEMENT_TIMEOUT_IN_SECONDS = {queries.IDLE_TIMEOUT_SECONDS} AUTO_SUSPEND = 60 AUTO_RESUME = TRUE"
+    )
+
+
+def reset_to_idle(cur: Any, warehouse: str) -> None:
+    """:func:`set_idle`, ignoring errors, for ``finally`` blocks that mustn't hide the real exception."""
+    with suppress(Exception):
+        set_idle(cur, warehouse)
 
 
 def _check_account_usage(cur: Any, echo: Echo) -> None:

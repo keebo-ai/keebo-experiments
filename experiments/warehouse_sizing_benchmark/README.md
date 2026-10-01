@@ -15,19 +15,20 @@ The low point is the size you want.
 Most of that comes from spill. The query groups about 600M rows into almost one
 group per row. A small warehouse doesn't have the memory to hold that, so
 Snowflake writes it to local disk and keeps going, which is slow. A bigger
-warehouse keeps it in memory. The data scanned is the same at every size, so the
-difference is memory.
+warehouse keeps it in memory. The data scanned is the same at every size. What
+changes is how much memory and CPU the warehouse has, and on the small sizes the
+memory runs out.
 
 ## ⚠️ Before you run it
 
 This runs real queries on your account and costs credits. A full sweep (X-Small
 to 2X-Large, three runs each) costs about 1.3 credits.
 
-- `run` stops at `--max-credits`, 3 by default. That includes Snowflake's
-  60-second minimum for each size. Each query gets a statement timeout based on
-  the warehouse's rate, and a query that hits it shows up with a `+` instead of
-  failing the run. Cloud services credits aren't counted, but they're usually
-  waived.
+- `run` is designed to stay under `--max-credits`, 3 by default, counting
+  Snowflake's 60-second minimum for each size. It does that by giving each query
+  a time limit based on the warehouse's rate. A query that hits it is cancelled,
+  and its numbers show with a `+` to mark them as a lower bound. Cloud services
+  credits aren't counted, but they're usually waived.
 - `setup` and `report` cost about 0.02 credits each. If your role can't read the
   sample data, `setup` builds its own copy of the table. That costs up to 0.5
   credits, plus storage (15-25 GB) until you run `cleanup`.
@@ -65,9 +66,9 @@ caching needs `ALLOW_CLIENT_MFA_CACHING` on the account. On macOS, click
 ## Usage
 
 ```bash
-poetry run keebo-experiments warehouse-sizing setup     # Steps 1-3: create the warehouse and database
-poetry run keebo-experiments warehouse-sizing run       # Steps 4-9: run the query on every size
-poetry run keebo-experiments warehouse-sizing report    # Steps 10-16: the billed numbers, a few minutes later
+poetry run keebo-experiments warehouse-sizing setup     # Steps 1 and 3: create the warehouse and database
+poetry run keebo-experiments warehouse-sizing run       # Steps 2-9: run the query on every size
+poetry run keebo-experiments warehouse-sizing report    # Steps 10-16: the billed numbers, once ACCOUNT_USAGE catches up
 poetry run keebo-experiments warehouse-sizing cleanup   # Step 17: drop what setup created
 ```
 
@@ -77,8 +78,9 @@ all):
 
 - `run --size medium --size large` runs only those sizes.
 - `run --runs 5` changes the number of runs per size. The first run is cold.
-- `run --table SNOWFLAKE_SAMPLE_DATA.TPCH_SF1000.LINEITEM` uses 6B rows, at about
-  10x the cost.
+- `run --table SNOWFLAKE_SAMPLE_DATA.TPCH_SF1000.LINEITEM` uses 6B rows. It costs
+  about 10x as much, so raise `--max-credits` to 15 or the bigger queries stop
+  early.
 - `run --max-credits 3` sets the cost cap.
 - `setup --generation 2` pins Gen2. It costs 1.35x as much per hour and isn't
   available in every region.
@@ -100,19 +102,21 @@ With two sizes, `run` puts them side by side. These numbers are made up:
 --- X-Small vs Medium ---
   metric                       X-Small  Medium   change
   ---------------------------  -------  -------  ------------
-  runtime, cold (s)            70.0     10.0     7.0x faster
-  local spill (GB)             16.00    0.00     eliminated
-  remote spill (GB)            0.00     0.00     —
-  credits per query            0.01944  0.01111  43% cheaper
-  credits billed for this run  0.01944  0.06667  243% pricier
+  runtime, cold (s)            80.0     11.0     7.3x faster
+  local spill (GB)             18.00    1.20     93% less
+  remote spill (GB)            0.00     0.00     none
+  credits per query            0.02222  0.01222  45% cheaper
+  credits billed for this run  0.02306  0.06667  2.9x as much
 
-This run used about 0.086 credits. Each size bills at least 60 seconds when it resumes. ...
+This run used about 0.090 credits, counting the 60-second minimum each size bills when it resumes. ...
+Cheapest per query: Medium (0.01222 credits).
+The Medium ran for 14s but bills the 60-second minimum. On a warehouse that's already running, each query costs 0.01222 credits.
 ```
 
 The Medium costs four times as much per hour, but it finishes seven times faster
-without spilling, so each query is cheaper. This run still bills the Medium
+and barely spills, so each query is cheaper. This run still bills the Medium
 more, because a warehouse bills at least 60 seconds every time it resumes and
-the Medium only needed 10. On a warehouse that's already running, like one
+the Medium only needed 14. On a warehouse that's already running, like one
 serving a real workload, the cost per query is what matters.
 
 When we tried it, an X-Small spilled tens of GB on the default table and a
@@ -126,20 +130,24 @@ doesn't show much, `run` suggests a different `--size` or `--table`.
   it falls back to the client's clock.
 - Spill comes from `GET_QUERY_OPERATOR_STATS` for each size's cold run, a few
   seconds after it finishes.
-- `query_credits` is the cold run's runtime times the size's rate.
-  `billed_credits` is all of that size's runs together, with a 60-second minimum.
+- Credits per query is the median run's runtime times the size's rate (with one
+  run, that's the cold run). It's what the query costs on a warehouse that's
+  already running. Credits billed is how long the size was up, from resume to
+  suspend, with a 60-second minimum. `report` Steps 12 and 14 work out the same
+  two numbers from `ACCOUNT_USAGE`, and Steps 15 and 16 are what Snowflake billed.
 - `report` reads one run from `ACCOUNT_USAGE`. It finds the run by its query tag
   (`wsbench:<run id>:<size>:<attempt>`) on the benchmark warehouse.
-- The result cache is off, and the warehouse suspends between sizes so each one
-  starts cold.
+- The result cache is off. The warehouse suspends before each size, which drops
+  its local cache, so each size's first run is cold and later runs are warm.
 
 ## Layout
 
 - `cli.py`: the `click` commands (`setup`, `run`, `report`, `cleanup`).
 - `core/queries.py`: the SQL and constants.
 - `core/infra.py`: creates, checks, and drops the warehouse and database
-  (Steps 1-3, 17).
-- `core/sweep.py`: runs each size and reads its stats (Steps 4-9).
+  (Steps 1, 3, and 17).
+- `core/sweep.py`: the cost cap, and runs each size and reads its stats
+  (Steps 2-9).
 - `core/report.py`: the results tables and the `ACCOUNT_USAGE` report
   (Steps 10-16).
 

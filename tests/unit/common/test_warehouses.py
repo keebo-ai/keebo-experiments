@@ -8,10 +8,18 @@ from common import warehouses
 
 
 def test_sizes_run_xsmall_to_xxlarge_doubling():
-    assert warehouses.SIZE_KEYWORDS == ["XSMALL", "SMALL", "MEDIUM", "LARGE", "XLARGE", "XXLARGE"]
+    assert warehouses.SIZE_KEYWORDS == ("XSMALL", "SMALL", "MEDIUM", "LARGE", "XLARGE", "XXLARGE")
+    assert warehouses.CREDITS_PER_HOUR["XXLARGE"] == 32
     rates = [credits for _, _, credits in warehouses.SIZES]
     assert rates == [1, 2, 4, 8, 16, 32]
     assert warehouses.SIZE_LABEL["XXLARGE"] == "2X-Large"
+
+
+def test_multiplier_is_gen2s_premium():
+    assert warehouses.multiplier("1") == 1.0
+    assert warehouses.multiplier("2") == pytest.approx(1.35)
+    with pytest.raises(ValueError, match="generation"):
+        warehouses.multiplier("3")
 
 
 def test_credits_per_hour_applies_the_generation():
@@ -36,3 +44,7 @@ def test_credits_per_hour_rejects_unknown_values(size, generation, match):
 )
 def test_generation_of_reads_either_column(row, expected):
     assert warehouses.generation_of(row) == expected
+
+
+def test_generation_of_prefers_resource_constraint_like_multi_cluster_billing():
+    assert warehouses.generation_of({"resource_constraint": "STANDARD_GEN_2", "generation": "1"}) == "2"

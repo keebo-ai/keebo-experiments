@@ -84,3 +84,17 @@ def test_connection_closes_on_exit(monkeypatch):
         assert not conn.closed
 
     assert conn.closed
+
+
+def test_rows_keys_columns_by_lower_case_name(make_cursor):
+    cursor = make_cursor(fetch=[("MY_WH", "mine")], description=[("NAME",), ("COMMENT",)])
+    cursor.execute("SHOW WAREHOUSES")
+    assert sf.rows(cursor) == [{"name": "MY_WH", "comment": "mine"}]
+
+
+def test_is_statement_timeout_checks_snowflakes_error_number():
+    class Timeout(Exception):
+        errno = 630
+
+    assert sf.is_statement_timeout(Timeout())
+    assert not sf.is_statement_timeout(RuntimeError("boom"))

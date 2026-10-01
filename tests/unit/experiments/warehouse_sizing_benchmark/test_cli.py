@@ -13,6 +13,7 @@ import pytest
 from click.testing import CliRunner
 from mockito import unstub, when
 
+from common import warehouses
 from experiments.warehouse_sizing_benchmark import cli as cli_module
 
 
@@ -76,7 +77,10 @@ def test_run_full_sweep_by_default(runner, account):
     _stub_connection(conn)
     result = _invoke(runner, "run", "--runs", "1")
     assert result.exit_code == 0, result.output
-    assert sum("SET WAREHOUSE_SIZE =" in s and "XSMALL STATEMENT" not in s for s in cursor.executed) >= 5
+    sql = " ".join(cursor.executed)
+    assert all(
+        f"SET WAREHOUSE_SIZE = {keyword} STATEMENT_TIMEOUT_IN_SECONDS" in sql for keyword in warehouses.SIZE_KEYWORDS
+    )
     assert " vs " not in result.output
     assert "Cheapest per query:" in result.output
 

@@ -62,6 +62,21 @@ def env_credentials() -> dict[str, str | None]:
     }
 
 
+# Snowflake error 000630: the statement hit its STATEMENT_TIMEOUT_IN_SECONDS.
+_STATEMENT_TIMEOUT_ERRNO = 630
+
+
+def is_statement_timeout(exc: BaseException) -> bool:
+    """Whether ``exc`` is Snowflake cancelling a statement for running past its timeout."""
+    return getattr(exc, "errno", None) == _STATEMENT_TIMEOUT_ERRNO
+
+
+def rows(cur: Any) -> list[dict[str, Any]]:
+    """The cursor's result rows as dicts, keyed by lower-case column name."""
+    columns = [column[0].lower() for column in cur.description]
+    return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
+
+
 def _connector() -> Any:
     """Import the Snowflake connector lazily (heavy optional dependency)."""
     from snowflake import connector  # noqa: PLC0415

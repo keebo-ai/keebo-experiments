@@ -6,17 +6,12 @@ import pytest
 
 from common import dedicated
 
-OURS = dedicated.owner_comment("demo")
+OURS = "Created by the demo experiment - safe to drop"
 SHOW_COLUMNS = [("name",), ("comment",)]
 
 
 def _cursor(make_cursor, rows):
     return make_cursor(fetch=rows, description=SHOW_COLUMNS)
-
-
-def test_owner_comment_names_the_experiment():
-    assert "keebo-experiments demo" in OURS
-    assert "'" not in OURS  # it's interpolated into COMMENT = '...'
 
 
 def test_find_matches_the_exact_name_despite_like_wildcards(make_cursor):
@@ -41,7 +36,7 @@ def test_claim_returns_our_object(make_cursor):
 def test_claim_refuses_someone_elses_object(make_cursor):
     cursor = _cursor(make_cursor, [("COMPUTE_WH", "production")])
 
-    with pytest.raises(ValueError, match="wasn't created by this experiment.*--warehouse"):
+    with pytest.raises(ValueError, match="this experiment didn't create it, so it won't be touched"):
         dedicated.claim(cursor, "WAREHOUSE", "COMPUTE_WH", comment=OURS)
 
 
@@ -59,7 +54,7 @@ def test_drop_is_a_no_op_when_absent(make_cursor):
 
 def test_drop_refuses_someone_elses_object(make_cursor):
     cursor = _cursor(make_cursor, [("DB", "production")])
-    with pytest.raises(ValueError, match="--database"):
+    with pytest.raises(ValueError, match="database DB already exists"):
         dedicated.drop(cursor, "DATABASE", "DB", comment=OURS)
     assert not any(s.startswith("DROP") for s in cursor.executed)
 

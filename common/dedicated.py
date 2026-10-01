@@ -15,28 +15,15 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from common.snowflake import rows
 from common.sql import validate_name
 
 KINDS = ("WAREHOUSE", "DATABASE")
 
 
-def owner_comment(experiment: str) -> str:
-    """The COMMENT that marks an object as created by ``experiment``."""
-    return f"Created by keebo-experiments {experiment} - safe to drop"
-
-
 def find(cur: Any, kind: str, name: str) -> dict[str, Any] | None:
     """The ``SHOW <kind>S`` row for ``name`` (columns keyed by lower-case name), or ``None``."""
-    _check_kind(kind)
-    name = validate_name(name, kind.lower())
-    cur.execute(f"SHOW {kind}S LIKE '{name}'")
-    columns = [column[0].lower() for column in cur.description]
-    # LIKE treats "_" as a wildcard, so match the name exactly.
-    for row in cur.fetchall():
-        record = dict(zip(columns, row, strict=False))
-        if str(record.get("name", "")).upper() == name:
-            return record
-    return None
+    return _find(cur, kind, validate_name(name, kind.lower()))
 
 
 def claim(cur: Any, kind: str, name: str, *, comment: str) -> dict[str, Any] | None:
@@ -46,12 +33,11 @@ def claim(cur: Any, kind: str, name: str, *, comment: str) -> dict[str, Any] | N
     by this experiment.
     """
     name = validate_name(name, kind.lower())
-    record = find(cur, kind, name)
+    record = _find(cur, kind, name)
     if record is not None and record.get("comment") != comment:
-        noun = kind.lower()
         raise ValueError(
-            f"{noun} {name} already exists and wasn't created by this experiment, so it won't be "
-            f"touched. Choose a different name with --{noun}."
+            f"{kind.lower()} {name} already exists and this experiment didn't create it, so it won't be "
+            "touched. Pick a different name."
         )
     return record
 
@@ -65,13 +51,8 @@ def drop(cur: Any, kind: str, name: str, *, comment: str) -> bool:
     return True
 
 
-def _check_kind(kind: str) -> None:
-    if kind not in KINDS:
-        raise ValueError(f"kind must be one of {', '.join(KINDS)}, got {kind!r}")
-
-
 def suspend_quietly(cur: Any, warehouse: str, echo: Callable[[str], None] | None = None) -> None:
-    """Suspend ``warehouse``, ignoring errors.
+    """Suspend ``warehouse``, ignoring errors. The caller must already have claimed it.
 
     For ``finally`` blocks, where a failure (e.g. "already suspended") would
     otherwise hide the real exception. A warehouse's AUTO_SUSPEND is the backstop.
@@ -81,3 +62,11 @@ def suspend_quietly(cur: Any, warehouse: str, echo: Callable[[str], None] | None
     except Exception as exc:  # best effort by design
         if echo:
             echo(f"  (couldn't suspend {warehouse}: {exc}; it auto-suspends when idle)")
+
+
+def _find(cur: Any, kind: str, name: str) -> dict[str, Any] | None:
+    if kind not in KINDS:
+        raise ValueError(f"kind must be one of {', '.join(KINDS)}, got {kind!r}")
+    cur.execute(f"SHOW {kind}S LIKE '{name}'")
+    # LIKE treats "_" as a wildcard, so match the name exactly.
+    return next((row for row in rows(cur) if str(row.get("name", "")).upper() == name), None)

@@ -1,37 +1,15 @@
 """The SQL and constants behind the warehouse-sizing benchmark.
 
-Kept apart from the orchestration logic so the queries — the part you'd tweak to
-change the workload or the reporting — read as data, in one place. No database
-or CLI dependencies here.
+Kept apart from the orchestration logic so the queries, the part you'd tweak to
+change the workload or the reporting, read as data in one place. No database or
+CLI dependencies here.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import re
 
 from common import warehouses
-from common.sql import validate_identifier
-
-__all__ = [
-    "BENCHMARK_QUERY",
-    "DEFAULT_DATABASE",
-    "DEFAULT_MAX_CREDITS",
-    "DEFAULT_TABLE",
-    "DEFAULT_WAREHOUSE",
-    "ELAPSED_SQL",
-    "GENERATED_TABLE",
-    "GENERATED_TABLE_SQL",
-    "LATEST_RUN_SQL",
-    "OWNER_COMMENT",
-    "QUERY_TAG_PREFIX",
-    "REPORT_STEPS",
-    "SIZES",
-    "SIZE_KEYWORDS",
-    "SOURCE_ROWS",
-    "SPILL_SQL",
-    "query_timeouts",
-    "validate_identifier",
-]
 
 # --------------------------------------------------------------------------- #
 # The benchmark workload
@@ -52,95 +30,66 @@ BENCHMARK_QUERY = (
     "ORDER BY net_revenue DESC LIMIT 100"
 )
 
-# The sweep covers every standard size, straight from the shared table: each entry
-# is (ALTER WAREHOUSE keyword, name recorded in QUERY_HISTORY, credits/hr).
-SIZES = warehouses.SIZES
-SIZE_KEYWORDS = warehouses.SIZE_KEYWORDS
-
 DEFAULT_TABLE = "SNOWFLAKE_SAMPLE_DATA.TPCH_SF100.LINEITEM"
 DEFAULT_WAREHOUSE = "SIZING_BENCHMARK_WH"
 DEFAULT_DATABASE = "SIZING_BENCHMARK_DB"
-QUERY_TAG_PREFIX = "wsbench"
 
 # Marks the warehouse and database as the benchmark's own. Nothing is resized,
 # suspended, or dropped without it. It's the comment earlier versions put on
 # the warehouse, so a warehouse they created is still recognised.
 OWNER_COMMENT = "Keebo warehouse-sizing benchmark - safe to drop"
 
+# Every benchmark query is tagged wsbench:<run id>:<size>:<attempt>. Run ids are
+# UTC timestamps (e.g. 20261001-143318), so the latest run sorts last.
+QUERY_TAG_PREFIX = "wsbench"
+_RUN_ID = re.compile(r"[0-9A-Za-z-]+")
+
+
+def validate_run_id(run_id: str) -> str:
+    """Return ``run_id`` if it's safe inside a query tag, else raise ``ValueError``."""
+    if not _RUN_ID.fullmatch(run_id):
+        raise ValueError(f"run id must be letters, digits, and dashes, got {run_id!r}")
+    return run_id
+
+
 # --------------------------------------------------------------------------- #
 # The generated fallback table
 #
 # Used only when the role can't read the SNOWFLAKE_SAMPLE_DATA share. `setup`
-# then generates a table with LINEITEM's columns and TPCH_SF100's row count in
-# the benchmark's own database. Every value is a hash of the row number, and
-# order keys repeat four times, as in TPC-H, so the GROUP BY has the same shape.
+# then generates TPCH_SF100's row count in the benchmark's own database, with
+# the LINEITEM columns and types the benchmark reads. Every value is a hash of
+# the row number, and order keys repeat about four times, as in TPC-H, so the
+# GROUP BY has the same shape.
 # --------------------------------------------------------------------------- #
 GENERATED_TABLE = "PUBLIC.LINEITEM"  # inside the benchmark database
 SOURCE_ROWS = 600_000_000
-SETUP_TIMEOUT_SECONDS = 1800  # the idle warehouse's timeout, for setup's checks and `report`
+IDLE_TIMEOUT_SECONDS = 1800  # the warehouse's timeout between runs: setup's checks and `report`
 GENERATE_SIZE = "MEDIUM"  # 4x the X-Small's speed for the same credits
 GENERATE_TIMEOUT_SECONDS = 450  # generating the table: at most 0.5 credits on a Gen1 Medium
 
 GENERATED_TABLE_SQL = """
 CREATE TABLE {table} AS
-SELECT FLOOR(seq / 4) + 1                                            AS l_orderkey,
-       ABS(HASH(seq, 1)) % 20000000 + 1                              AS l_partkey,
-       ABS(HASH(seq, 2)) % 1000000 + 1                               AS l_suppkey,
-       ABS(HASH(seq, 3)) % 50 + 1                                    AS l_quantity,
-       (ABS(HASH(seq, 4)) % 10400000 + 90000) / 100                  AS l_extendedprice,
-       (ABS(HASH(seq, 5)) % 11) / 100                                AS l_discount,
-       DATEADD('day', ABS(HASH(seq, 6)) % 2500, '1992-01-01'::DATE)  AS l_shipdate
+SELECT FLOOR(seq / 4) + 1                                              AS l_orderkey,
+       ABS(HASH(seq, 1)) % 20000000 + 1                                AS l_partkey,
+       ABS(HASH(seq, 2)) % 1000000 + 1                                 AS l_suppkey,
+       (ABS(HASH(seq, 3)) % 50 + 1)::NUMBER(12, 2)                     AS l_quantity,
+       ((ABS(HASH(seq, 4)) % 10400000 + 90000) / 100)::NUMBER(12, 2)   AS l_extendedprice,
+       ((ABS(HASH(seq, 5)) % 11) / 100)::NUMBER(12, 2)                 AS l_discount,
+       DATEADD('day', ABS(HASH(seq, 6)) % 2500, '1992-01-01'::DATE)    AS l_shipdate
 FROM (SELECT SEQ8() AS seq FROM TABLE(GENERATOR(ROWCOUNT => {rows})))
 """
 
 # --------------------------------------------------------------------------- #
-# The cost cap
-#
-# ``--max-credits`` caps the compute credits a run bills, Snowflake's 60-second
-# minimums included. A size bills the greater of 60 seconds and its active time,
-# so each size is reserved its minimum first, and the rest of the budget is
-# shared evenly across the sizes. A size's queries may then use the 60 seconds
-# it pays for anyway plus its share, split across its runs, less a small
-# allowance per query for the tag and stats statements around it. That becomes
-# the size's STATEMENT_TIMEOUT_IN_SECONDS, and Snowflake cancels anything longer.
-# Cloud-services credits, normally waived under Snowflake's 10% rule, aren't
-# counted. The full article sweep (6 sizes x 3 runs) bills about 1.3 credits.
+# The cost cap (see sweep.query_timeouts)
 # --------------------------------------------------------------------------- #
 DEFAULT_MAX_CREDITS = 3.0
 OVERHEAD_SECONDS_PER_QUERY = 10  # the tag ALTERs and stats lookups billed alongside each query
 MIN_TIMEOUT_SECONDS = 10
 
-
-def query_timeouts(keywords: Sequence[str], *, generation: str, runs: int, max_credits: float) -> dict[str, int]:
-    """Each size's per-query timeout so the whole run stays within ``max_credits``."""
-    rates = {keyword: warehouses.credits_per_hour(keyword, generation) for keyword in keywords}
-    minimum_s = warehouses.BILLING_MINIMUM_SECONDS
-    minimums = sum(rate * minimum_s / 3600 for rate in rates.values())
-    budget = max_credits - minimums
-    if budget <= 0:
-        raise ValueError(
-            f"--max-credits {max_credits:g} doesn't cover Snowflake's 60-second minimum for these sizes "
-            f"({minimums:.2f} credits). Raise --max-credits or pick fewer --size."
-        )
-    share = budget / len(rates)
-    timeouts = {
-        keyword: int((minimum_s + share * 3600 / rate) / runs - OVERHEAD_SECONDS_PER_QUERY)
-        for keyword, rate in rates.items()
-    }
-    tightest = min(timeouts, key=timeouts.get)
-    if timeouts[tightest] < MIN_TIMEOUT_SECONDS:
-        raise ValueError(
-            f"--max-credits {max_credits:g} gives each {warehouses.SIZE_LABEL[tightest]} query only "
-            f"{timeouts[tightest]}s. Raise --max-credits, or pick fewer --size / --runs."
-        )
-    return timeouts
-
-
 # --------------------------------------------------------------------------- #
 # Live per-query stats
 #
-# ACCOUNT_USAGE lags minutes, so `run` reads two faster sources right after each
-# query, to show results as they happen:
+# ACCOUNT_USAGE lags, so `run` reads two faster sources right after each query:
 #
 # - GET_QUERY_OPERATOR_STATS: each operator's spill, as soon as the query
 #   finishes. An operator that didn't spill has no ``spilling`` entry (0).
@@ -167,22 +116,30 @@ ACCOUNT_USAGE_PROBE = "SELECT 1 FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY LIMIT
 # --------------------------------------------------------------------------- #
 # Reporting queries (Steps 10-16)
 #
-# Every benchmark query is tagged ``wsbench:<run id>:<size>:<attempt>``, and the
-# report reads one run: the latest by default. ``{tag}`` is that run's tag
-# prefix, ``{wh}`` the upper-cased warehouse name, ``{hours}`` the lookback, and
-# ``{multiplier}`` the warehouse generation's rate multiple (Gen1 1, Gen2 1.35).
-# All are validated before being formatted in.
+# The report reads one run: the latest by default. Fill the placeholders with
+# report_sql(): ``{wh}`` is the upper-cased warehouse name, ``{tag}`` the run's
+# tag prefix, ``{hours}`` the lookback, ``{multiplier}`` the generation's rate
+# multiple, and ``{rates}`` / ``{size_order}`` come from the shared size table.
+#
+# How long each view takes to catch up: QUERY_HISTORY up to ~45 minutes,
+# WAREHOUSE_METERING_HISTORY up to ~3 hours, QUERY_ATTRIBUTION_HISTORY up to ~8.
 # --------------------------------------------------------------------------- #
-# Run ids are UTC timestamps, so the latest sorts last. Tags from before run ids
-# (``wsbench:<size>:<attempt>``) and custom ids don't match the pattern.
 LATEST_RUN_SQL = """
 SELECT MAX(SPLIT_PART(query_tag, ':', 2)) AS run_id
 FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
 WHERE warehouse_name = '{wh}'
   AND query_tag LIKE 'wsbench:%'
+  -- Only timestamp run ids; tags from before run ids (wsbench:<size>:<attempt>) don't match.
   AND REGEXP_LIKE(SPLIT_PART(query_tag, ':', 2), '[0-9]{{8}}-[0-9]{{6}}')
   AND start_time > DATEADD('hour', -{hours}, CURRENT_TIMESTAMP())
 """
+
+# One row per size, e.g. SELECT 'X-Small' sz, 1 cph, 1 ord UNION ALL ...
+_RATES = "\n            UNION ALL ".join(
+    f"SELECT '{label}' sz, {credits} cph, {order} ord" for order, (_, label, credits) in enumerate(warehouses.SIZES, 1)
+)
+# The sizes in order, for ORDER BY CASE <size column> {size_order} END.
+_SIZE_ORDER = " ".join(f"WHEN '{label}' THEN {order}" for order, (_, label, _) in enumerate(warehouses.SIZES, 1))
 
 REPORT_STEPS: list[tuple[int, str, str]] = [
     (
@@ -207,7 +164,8 @@ REPORT_STEPS: list[tuple[int, str, str]] = [
         SELECT query_tag,
                warehouse_size AS sf_recorded_size,
                query_hash,
-               ROUND(total_elapsed_time / 1000, 1) AS elapsed_s
+               ROUND(total_elapsed_time / 1000, 1) AS elapsed_s,
+               execution_status
         FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
         WHERE warehouse_name = '{wh}' AND query_tag LIKE '{tag}%'
           AND query_text ILIKE 'SELECT l_orderkey%'
@@ -217,25 +175,21 @@ REPORT_STEPS: list[tuple[int, str, str]] = [
     ),
     (
         12,
-        "The sizing curve (median runtime + estimated credits per query)",
+        "The sizing curve (median runtime of the finished runs + credits per query)",
         """
         WITH runs AS (
-            SELECT warehouse_size AS sz, total_elapsed_time / 1000.0 AS s
+            SELECT warehouse_size AS sz, total_elapsed_time / 1000.0 AS s, execution_status = 'SUCCESS' AS ok
             FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
             WHERE warehouse_name = '{wh}' AND query_tag LIKE '{tag}%'
               AND query_text ILIKE 'SELECT l_orderkey%'
               AND start_time > DATEADD('hour', -{hours}, CURRENT_TIMESTAMP())
         ), rate AS (
-            SELECT 'X-Small' sz, 1 cph, 1 ord
-            UNION ALL SELECT 'Small',2,2
-            UNION ALL SELECT 'Medium',4,3
-            UNION ALL SELECT 'Large',8,4
-            UNION ALL SELECT 'X-Large',16,5
-            UNION ALL SELECT '2X-Large',32,6
+            {rates}
         )
         SELECT rate.sz AS warehouse_size, rate.cph * {multiplier} AS credits_per_hr, COUNT(*) AS runs,
-               ROUND(MEDIAN(r.s), 1)                                  AS median_s,
-               ROUND(rate.cph * {multiplier} * MEDIAN(r.s) / 3600, 5) AS est_credits_per_query
+               COUNT_IF(NOT r.ok)                                                     AS cancelled,
+               ROUND(MEDIAN(IFF(r.ok, r.s, NULL)), 1)                                  AS median_s,
+               ROUND(rate.cph * {multiplier} * MEDIAN(IFF(r.ok, r.s, NULL)) / 3600, 5) AS est_credits_per_query
         FROM runs r JOIN rate ON rate.sz = r.sz
         GROUP BY rate.sz, rate.cph, rate.ord
         ORDER BY rate.ord
@@ -256,32 +210,26 @@ REPORT_STEPS: list[tuple[int, str, str]] = [
           AND query_text ILIKE 'SELECT l_orderkey%'
           AND start_time > DATEADD('hour', -{hours}, CURRENT_TIMESTAMP())
         GROUP BY warehouse_size
-        ORDER BY CASE warehouse_size
-                 WHEN 'X-Small' THEN 1 WHEN 'Small' THEN 2 WHEN 'Medium' THEN 3
-                 WHEN 'Large' THEN 4 WHEN 'X-Large' THEN 5 ELSE 6 END
+        ORDER BY CASE warehouse_size {size_order} END
         """,
     ),
     (
         14,
-        "Billed credits with the 60-second minimum",
+        "Billed credits with the 60-second minimum (cancelled runs included: they were billed)",
         """
         WITH runs AS (
-            SELECT warehouse_size AS sz, total_elapsed_time / 1000.0 AS s
+            SELECT warehouse_size AS sz, total_elapsed_time / 1000.0 AS s, execution_status = 'SUCCESS' AS ok
             FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
             WHERE warehouse_name = '{wh}' AND query_tag LIKE '{tag}%'
               AND query_text ILIKE 'SELECT l_orderkey%'
               AND start_time > DATEADD('hour', -{hours}, CURRENT_TIMESTAMP())
         ), agg AS (
-            SELECT sz, SUM(s) AS active_s, COUNT(*) AS n FROM runs GROUP BY sz
+            SELECT sz, SUM(s) AS active_s, COUNT(*) AS n, COUNT_IF(NOT ok) AS cancelled FROM runs GROUP BY sz
         ), rate AS (
-            SELECT 'X-Small' sz, 1 cph, 1 ord
-            UNION ALL SELECT 'Small',2,2
-            UNION ALL SELECT 'Medium',4,3
-            UNION ALL SELECT 'Large',8,4
-            UNION ALL SELECT 'X-Large',16,5
-            UNION ALL SELECT '2X-Large',32,6
+            {rates}
         )
         SELECT rate.sz AS warehouse_size, rate.cph * {multiplier} AS credits_per_hr, agg.n AS runs,
+               agg.cancelled,
                ROUND(agg.active_s, 1)                                                AS active_s_sum,
                ROUND(GREATEST(agg.active_s, 60) * rate.cph * {multiplier} / 3600, 4) AS billed_cr_with_60s_floor,
                ROUND(agg.active_s * rate.cph * {multiplier} / 3600, 4)               AS billed_cr_no_floor
@@ -291,20 +239,21 @@ REPORT_STEPS: list[tuple[int, str, str]] = [
     ),
     (
         15,
-        "Billed total for the warehouse: every run and setup in the window (can lag up to 3h)",
+        "What Snowflake billed the warehouse: every run and setup in the window (can take up to 3 hours to show up)",
         """
         SELECT SUM(credits_used)         AS total_billed_credits,
                SUM(credits_used_compute) AS compute_credits,
                MIN(start_time) AS first_hour, MAX(end_time) AS last_hour
         FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
         WHERE warehouse_name = '{wh}'
-          AND start_time > DATEADD('hour', -{hours}, CURRENT_TIMESTAMP())
+          -- Metering rows are hourly, so start from the top of the window's first hour.
+          AND start_time >= DATE_TRUNC('hour', DATEADD('hour', -{hours}, CURRENT_TIMESTAMP()))
         HAVING COUNT(*) > 0
         """,
     ),
     (
         16,
-        "Billed credits per query (highest latency view — run last)",
+        "Billed credits per query (can take up to 8 hours to show up, so run it last)",
         """
         SELECT q.warehouse_size,
                COUNT(*)                                       AS queries,
@@ -314,11 +263,24 @@ REPORT_STEPS: list[tuple[int, str, str]] = [
         JOIN SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY q USING (query_id)
         WHERE q.warehouse_name = '{wh}' AND q.query_tag LIKE '{tag}%'
           AND q.query_text ILIKE 'SELECT l_orderkey%'
+          AND q.start_time > DATEADD('hour', -{hours}, CURRENT_TIMESTAMP())
           AND a.start_time > DATEADD('hour', -{hours}, CURRENT_TIMESTAMP())
         GROUP BY q.warehouse_size
-        ORDER BY CASE q.warehouse_size
-                 WHEN 'X-Small' THEN 1 WHEN 'Small' THEN 2 WHEN 'Medium' THEN 3
-                 WHEN 'Large' THEN 4 WHEN 'X-Large' THEN 5 ELSE 6 END
+        ORDER BY CASE q.warehouse_size {size_order} END
         """,
     ),
 ]
+
+
+def report_sql(sql: str, *, warehouse: str, run_id: str, hours: int, generation: str) -> str:
+    """Fill a report step's placeholders. Everything formatted in is validated or a constant."""
+    if int(hours) < 1:
+        raise ValueError(f"hours must be at least 1, got {hours}")
+    return sql.format(
+        wh=warehouse,
+        tag=f"{QUERY_TAG_PREFIX}:{validate_run_id(run_id)}:",
+        hours=int(hours),
+        multiplier=warehouses.multiplier(generation),
+        rates=_RATES,
+        size_order=_SIZE_ORDER,
+    )

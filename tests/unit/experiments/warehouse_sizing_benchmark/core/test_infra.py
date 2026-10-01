@@ -7,6 +7,10 @@ import pytest
 from experiments.warehouse_sizing_benchmark.core import infra, queries
 
 OBJECTS = infra.BenchmarkObjects.named()
+IDLE = (
+    "ALTER WAREHOUSE SIZING_BENCHMARK_WH SET WAREHOUSE_SIZE = XSMALL STATEMENT_TIMEOUT_IN_SECONDS = 1800 "
+    "AUTO_SUSPEND = 60 AUTO_RESUME = TRUE"
+)
 
 
 def test_named_validates_and_upper_cases():
@@ -29,6 +33,7 @@ def test_setup_creates_the_objects_and_uses_the_sample_data(account):
     assert "GENERATION = '1'" in create_wh
     assert f"COMMENT = '{queries.OWNER_COMMENT}'" in create_wh
     assert any(s.startswith("CREATE TRANSIENT DATABASE SIZING_BENCHMARK_DB") for s in sql)
+    assert IDLE in sql
     assert not any(s.strip().startswith("CREATE TABLE") for s in sql)
     assert any("Using Snowflake's sample data" in m for m in messages)
     assert sql[-1] == "ALTER WAREHOUSE SIZING_BENCHMARK_WH SUSPEND"
@@ -46,15 +51,27 @@ def test_setup_is_idempotent(account):
     assert "Reusing database SIZING_BENCHMARK_DB." in messages
 
 
-def test_setup_generates_the_table_when_the_sample_data_is_unreadable(account):
+def test_setup_generates_the_table_on_a_medium_when_the_sample_data_is_unreadable(account):
     cursor, conn = account(sample_data=False)
 
     infra.setup(conn, OBJECTS)
 
-    ctas = next(s for s in cursor.executed if s.strip().startswith("CREATE TABLE"))
-    assert ctas.strip().startswith("CREATE TABLE SIZING_BENCHMARK_DB.PUBLIC.LINEITEM AS")
-    resize = "ALTER WAREHOUSE SIZING_BENCHMARK_WH SET WAREHOUSE_SIZE = MEDIUM STATEMENT_TIMEOUT_IN_SECONDS = 450"
-    assert cursor.executed.index(resize) < cursor.executed.index(ctas)
+    sql = cursor.executed
+    ctas = next(i for i, s in enumerate(sql) if s.strip().startswith("CREATE TABLE"))
+    assert sql[ctas].strip().startswith("CREATE TABLE SIZING_BENCHMARK_DB.PUBLIC.LINEITEM AS")
+    assert (
+        sql[ctas - 1]
+        == "ALTER WAREHOUSE SIZING_BENCHMARK_WH SET WAREHOUSE_SIZE = MEDIUM STATEMENT_TIMEOUT_IN_SECONDS = 450"
+    )
+    assert sql[ctas + 1] == IDLE
+
+
+def test_a_generation_timeout_is_a_clean_error_and_still_resets(account, snowflake_timeout):
+    cursor, conn = account(sample_data=False, fail={"CREATE TABLE": [snowflake_timeout()]})
+
+    with pytest.raises(ValueError, match="hit its 450s cap, so nothing was created"):
+        infra.setup(conn, OBJECTS)
+    assert cursor.executed[-2:] == [IDLE, "ALTER WAREHOUSE SIZING_BENCHMARK_WH SUSPEND"]
 
 
 def test_setup_reuses_a_generated_table(account):
@@ -68,53 +85,29 @@ def test_setup_reuses_a_generated_table(account):
 @pytest.mark.parametrize("kind", ["warehouse", "database"])
 def test_setup_refuses_someone_elses_object(account, kind):
     cursor, conn = account(**{f"{kind}_comment": "production"})
-    with pytest.raises(ValueError, match=f"wasn't created by this experiment.*--{kind}"):
+    with pytest.raises(ValueError, match=f"{kind} SIZING_BENCHMARK_\\w+ already exists and this experiment didn't"):
         infra.setup(conn, OBJECTS)
     assert not any(s.startswith(("CREATE", "ALTER WAREHOUSE", "DROP")) for s in cursor.executed)
 
 
 def test_a_taken_database_name_creates_nothing(account):
     cursor, conn = account(warehouse_comment=None, database_comment="production")
-    with pytest.raises(ValueError, match="--database"):
+    with pytest.raises(ValueError, match="database SIZING_BENCHMARK_DB"):
         infra.setup(conn, OBJECTS)
-    assert not any(s.startswith("CREATE") for s in cursor.executed)  # no half-created pair
-
-
-def test_generating_the_table_runs_on_a_medium_and_times_out_cleanly(account):
-    class _SnowflakeTimeout(Exception):
-        errno = 630
-
-    cursor, conn = account(sample_data=False)
-    real_execute = cursor.execute
-
-    def execute(sql, *args):
-        real_execute(sql, *args)
-        if sql.strip().startswith("CREATE TABLE"):
-            raise _SnowflakeTimeout("Statement reached its statement or warehouse timeout")
-        return cursor
-
-    cursor.execute = execute
-
-    with pytest.raises(ValueError, match="hit its 450s cap, so nothing was created"):
-        infra.setup(conn, OBJECTS)
-    sql = cursor.executed
-    ctas = next(i for i, s in enumerate(sql) if s.strip().startswith("CREATE TABLE"))
-    assert (
-        sql[ctas - 1]
-        == "ALTER WAREHOUSE SIZING_BENCHMARK_WH SET WAREHOUSE_SIZE = MEDIUM STATEMENT_TIMEOUT_IN_SECONDS = 450"
-    )
-    # Back to X-Small afterwards, and suspended, even though it failed.
-    assert (
-        sql[ctas + 1]
-        == "ALTER WAREHOUSE SIZING_BENCHMARK_WH SET WAREHOUSE_SIZE = XSMALL STATEMENT_TIMEOUT_IN_SECONDS = 1800"
-    )
-    assert sql[-1] == "ALTER WAREHOUSE SIZING_BENCHMARK_WH SUSPEND"
+    assert not any(s.startswith("CREATE") for s in cursor.executed)
 
 
 def test_setup_refuses_a_generation_mismatch(account):
     _cursor, conn = account(generation="2")
     with pytest.raises(ValueError, match="already exists as Gen2"):
         infra.setup(conn, OBJECTS, generation="1")
+
+
+def test_setup_warns_when_account_usage_is_unreadable(account):
+    _cursor, conn = account(fail={"ACCOUNT_USAGE": [RuntimeError("not authorized")]})
+    messages: list[str] = []
+    infra.setup(conn, OBJECTS, echo=messages.append)
+    assert any("can't read SNOWFLAKE.ACCOUNT_USAGE" in m for m in messages)
 
 
 def test_require_picks_the_sample_then_the_generated_table(account):
@@ -132,11 +125,16 @@ def test_require_checks_an_explicit_table(account):
         infra.require(cursor, OBJECTS, table="LINEITEM")
 
 
-def test_require_assumes_gen2_when_the_account_does_not_say(account):
+def test_require_warehouse_assumes_gen2_when_the_account_does_not_say(account):
     cursor, _conn = account(generation=None)
     messages: list[str] = []
-    assert infra.require(cursor, OBJECTS, echo=messages.append).generation == "2"
+    assert infra.require_warehouse(cursor, OBJECTS, echo=messages.append) == "2"
     assert "at the Gen2 rate to be safe" in messages[0]
+
+
+def test_require_warehouse_needs_no_database_or_table(account):
+    cursor, _conn = account(database_comment=None, sample_data=False)
+    assert infra.require_warehouse(cursor, OBJECTS) == "1"
 
 
 @pytest.mark.parametrize(
@@ -153,19 +151,29 @@ def test_require_points_at_setup(account, settings, match):
         infra.require(cursor, OBJECTS)
 
 
-def test_cleanup_is_idempotent_and_guarded(account):
+def test_cleanup_drops_both_objects(account):
     cursor, conn = account()
-    messages: list[str] = []
-    infra.cleanup(conn, OBJECTS, echo=messages.append)
+    infra.cleanup(conn, OBJECTS)
     assert "DROP WAREHOUSE IF EXISTS SIZING_BENCHMARK_WH" in cursor.executed
     assert "DROP DATABASE IF EXISTS SIZING_BENCHMARK_DB" in cursor.executed
 
+
+def test_cleanup_is_idempotent(account):
     _cursor, conn = account(warehouse_comment=None, database_comment=None)
-    messages = []
+    messages: list[str] = []
     infra.cleanup(conn, OBJECTS, echo=messages.append)
     assert messages == ["No warehouse SIZING_BENCHMARK_WH to drop.", "No database SIZING_BENCHMARK_DB to drop."]
 
+
+def test_cleanup_refuses_someone_elses_warehouse(account):
     cursor, conn = account(warehouse_comment="production")
-    with pytest.raises(ValueError, match="--warehouse"):
+    with pytest.raises(ValueError, match="this experiment didn't create it"):
         infra.cleanup(conn, OBJECTS)
     assert not any(s.startswith("DROP") for s in cursor.executed)
+
+
+def test_reset_to_idle_never_raises(make_cursor):
+    def connection_lost(sql):
+        raise RuntimeError("connection lost")
+
+    infra.reset_to_idle(make_cursor(route=connection_lost), "SIZING_BENCHMARK_WH")  # no exception
