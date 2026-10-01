@@ -78,9 +78,10 @@ all):
 
 - `run --size medium --size large` runs only those sizes.
 - `run --runs 5` changes the number of runs per size. The first run is cold.
-- `run --table SNOWFLAKE_SAMPLE_DATA.TPCH_SF1000.LINEITEM` uses 6B rows. It costs
-  about 10x as much, so raise `--max-credits` to 15 or the bigger queries stop
-  early.
+- `run --table SNOWFLAKE_SAMPLE_DATA.TPCH_SF1000.LINEITEM` uses 6B rows. It's
+  slower and spills more at every size, so the sizes look more alike (see
+  [what we got](#what-we-got)). For a full sweep on it, raise `--max-credits`
+  to 15 or the small sizes hit the cap.
 - `run --max-credits 3` sets the cost cap.
 - `setup --generation 2` pins Gen2. It costs 1.35x as much per hour and isn't
   available in every region.
@@ -90,39 +91,48 @@ all):
 
 ### Compare two sizes
 
-To see what spill costs, run the same query on two sizes:
+To see what spill costs, run the same query on two sizes. This is the one we
+use:
 
 ```bash
-poetry run keebo-experiments warehouse-sizing run --size xsmall --size medium --runs 1
+poetry run keebo-experiments warehouse-sizing setup
+poetry run keebo-experiments warehouse-sizing run --size xsmall --size medium --runs 5
+poetry run keebo-experiments warehouse-sizing cleanup
 ```
 
-With two sizes, `run` puts them side by side. These numbers are made up:
+With two sizes, `run` puts them side by side. It takes about 12 minutes,
+mostly the X-Small, and costs about 0.25 credits.
 
-```
---- X-Small vs Medium ---
-  metric                       X-Small  Medium   change
-  ---------------------------  -------  -------  ------------
-  runtime, cold (s)            80.0     11.0     7.3x faster
-  local spill (GB)             18.00    1.20     93% less
-  remote spill (GB)            0.00     0.00     none
-  credits per query            0.02222  0.01222  45% cheaper
-  credits billed for this run  0.02306  0.06667  2.9x as much
+Use `--runs 5`, not fewer. A Medium query takes about 14 seconds, and a
+warehouse bills at least 60 seconds every time it resumes. With one run, the
+Medium bills for a full minute and looks more expensive than the X-Small, even
+though each query is cheaper. Five runs add up to just over a minute, so the
+bill and the per-query cost agree. `run` tells you when a size ran under a
+minute.
 
-This run used about 0.090 credits, counting the 60-second minimum each size bills when it resumes. ...
-Cheapest per query: Medium (0.01222 credits).
-The Medium ran for 14s but bills the 60-second minimum. On a warehouse that's already running, each query costs 0.01222 credits.
-```
+### What we got
 
-The Medium costs four times as much per hour, but it finishes seven times faster
-and barely spills, so each query is cheaper. This run still bills the Medium
-more, because a warehouse bills at least 60 seconds every time it resumes and
-the Medium only needed 14. On a warehouse that's already running, like one
-serving a real workload, the cost per query is what matters.
+Gen1, one cold run plus warm runs, rounded. Your numbers will be a bit
+different.
 
-When we tried it, an X-Small spilled tens of GB on the default table and a
-Medium spilled a small fraction of that. We couldn't get an X-Small to spill to
-remote storage: its local disk took more than 200 GB first. If a comparison
-doesn't show much, `run` suggests a different `--size` or `--table`.
+| `--table` | Size | Runtime | Local spill | Remote spill | Credits per query |
+| --- | --- | --- | --- | --- | --- |
+| TPCH_SF100 (default) | X-Small | 105-115 s | 21-23 GB | 0 | 0.03 |
+| TPCH_SF100 (default) | Medium | 13-15 s | 1.5 GB | 0 | 0.015 |
+| TPCH_SF1000 | X-Small | 24 min | 330 GB | 0 | 0.40 |
+| TPCH_SF1000 | Medium | 6 min | 280 GB | 0 | 0.39 |
+
+On the default table, the Medium costs four times as much per hour but runs
+about 7.5x faster and spills about 93% less, so each query costs about half as
+much. That's the comparison to show.
+
+On SF1000 the Medium spills almost as much as the X-Small, so it's only 4x
+faster and about the same cost. It takes about 30 minutes and 0.8 credits, so
+it's not worth running for a two-size comparison.
+
+Neither table spilled to remote storage. The X-Small's local disk held more than
+300 GB. If a comparison doesn't show much, `run` suggests a different `--size`
+or `--table`.
 
 ## How it's measured
 

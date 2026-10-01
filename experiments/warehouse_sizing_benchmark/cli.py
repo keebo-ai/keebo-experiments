@@ -51,8 +51,8 @@ def warehouse_sizing() -> None:
         keebo-experiments warehouse-sizing cleanup   # drop everything setup created
 
     \b
-    To see what spill costs, compare two sizes:
-        keebo-experiments warehouse-sizing run --size xsmall --size medium --runs 1
+    To see what spill costs, compare two sizes (about 12 minutes, 0.25 credits):
+        keebo-experiments warehouse-sizing run --size xsmall --size medium --runs 5
 
     Everything runs on a warehouse and database the benchmark creates, and it
     won't touch anything it didn't create. It reads Snowflake's sample data
@@ -100,7 +100,8 @@ def setup(warehouse_name: str, database: str, generation: str, connection_name: 
     default=None,
     help=(
         "Fully-qualified table to query instead of the sample TPCH_SF100 (or setup's generated copy). "
-        "TPCH_SF1000 gives a sharper curve at about 10x the cost, so raise --max-credits to 15 with it."
+        "TPCH_SF1000 spills more at every size and takes about 15x as long; raise --max-credits to 15 for a "
+        "full sweep on it."
     ),
 )
 @click.option(
