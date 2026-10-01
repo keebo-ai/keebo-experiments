@@ -1,192 +1,94 @@
 # Warehouse-sizing benchmark
 
-Run one fixed query across Snowflake warehouse sizes and see what each size
-costs and how much it spills to disk, live, then read the billed credits back
-from Snowflake's own history. You get your own sizing curve on your own account.
-
-This is the script behind the Keebo article *"Run the warehouse-sizing
-benchmark yourself"*. It's also the code-along for the Keebo spillage webinar:
-[compare two sizes](#compare-two-sizes-the-spillage-demo) to show what disk
-spill costs.
+Run one fixed query across Snowflake warehouse sizes and see each size's
+runtime, disk spill, and cost — live — then read the billed credits back from
+Snowflake's own history. It's the script behind the Keebo article *"Run the
+warehouse-sizing benchmark yourself"*, and the code-along for the Keebo
+spillage webinar ([compare two sizes](#compare-two-sizes-the-spillage-demo)).
 
 ## What it demonstrates
 
-A bigger warehouse is not always more expensive per query. As the warehouse
-grows, runtime keeps falling while credits-per-query bottoms out and then
-climbs — the bottom is the sweet spot. The reason is disk **spill**: the query
-groups ~600M rows by (order, supplier), almost one group per row, and a small
-warehouse runs out of memory for that hash table and pushes it to disk (slow);
-larger ones stop. Partitions scanned stays constant, so the difference is
-compute and memory, not how much data was read.
+A bigger warehouse isn't always more expensive per query. As the warehouse
+grows, runtime falls while credits per query bottom out and then climb; the
+bottom is the sweet spot. The reason is disk **spill**: the query groups ~600M
+rows into almost one group per row, and a small warehouse runs out of memory for
+that hash table and pushes it to disk. Partitions scanned stay the same at every
+size, so the difference is memory, not data read.
 
 ## ⚠️ Before you run it
 
-This uses **real compute** on **your** account. The full X-Small to 2X-Large
-sweep bills about **1.3 credits** against `TPCH_SF100`.
+This uses **real compute** on **your** account. The full sweep (X-Small to
+2X-Large, 3 runs each) bills about **1.3 credits**.
 
-- **Every `run` has a hard cost cap, `--max-credits`, which defaults to 3.** It
-  caps the compute credits the run bills, Snowflake's 60-second minimums
-  included. A size bills at least 60 seconds each time it resumes, so each size
-  is reserved that first. The rest is shared across the sizes, and each size's
-  queries may use its minimum plus its share, less 10 seconds per query for the
-  stats lookups around it. That becomes the warehouse's
-  `STATEMENT_TIMEOUT_IN_SECONDS`, priced at the warehouse's actual generation
-  (Gen2 bills 1.35×). A query that hits the cap is reported as a lower bound
-  (`+`), not an error. Cloud-services credits, normally waived under
-  Snowflake's 10% rule, aren't counted.
-- **`setup`** costs about 0.02 credits, just Snowflake's 60-second minimum on
-  an X-Small. If it has to generate the table instead (see below), it does that
-  on a Medium capped at 7.5 minutes: **at most 0.5 credits** on Gen1. If it hits
-  the cap, nothing is created and `setup` says so. The generated table (roughly
-  15–25 GB) then bills normal storage until `cleanup`.
-- **`report`** runs its `ACCOUNT_USAGE` queries on the benchmark's X-Small:
-  about 0.02 credits.
+- **Every `run` is capped by `--max-credits` (default 3).** The cap covers the
+  run's compute credits, Snowflake's 60-second minimums included, and is
+  enforced with per-query statement timeouts at the warehouse's actual
+  generation. A query that hits it is reported as a lower bound (`+`), not an
+  error. Cloud-services credits (normally waived) aren't counted.
+- **`setup`** and **`report`** cost about 0.02 credits each. If the sample data
+  isn't readable, `setup` generates a table instead: at most 0.5 credits, plus
+  storage (roughly 15–25 GB) until `cleanup`.
 
-### What it creates, and what it never touches
-
-`setup` creates exactly two objects. Both carry the comment
-`Keebo warehouse-sizing benchmark - safe to drop`:
-
-- **Warehouse** `SIZING_BENCHMARK_WH`: X-Small, generation pinned
-  (`--generation`, default 1), auto-suspends after 60 seconds.
-- **Transient database** `SIZING_BENCHMARK_DB`. It gives the live stats a
-  database to run in. Only if your role can't read the sample data, it also
-  holds a generated `PUBLIC.LINEITEM` with the same shape: TPC-H's columns and
-  `TPCH_SF100`'s 600M rows. Transient means no Time Travel or Fail-safe
-  storage charges.
-
-Beyond its own objects, the benchmark only reads from your account: the sample
-data (a read-only share) and, for `report`, `ACCOUNT_USAGE`. Change the names with `--warehouse` and `--database`, and pass
-the same names to every command. `run` and `report` refuse to start unless both
-objects exist and carry that comment; they point you back to `setup`. If an
-object with one of those names already exists but wasn't created by the
-benchmark, every command stops with an error rather than resize, suspend, or
-drop it.
-
-Every command is safe to rerun. `setup` reuses what's there. Each `run` gets
-its own run id and leaves the warehouse X-Small and suspended afterwards.
-`report` only reads. `cleanup` drops what exists and says what wasn't there.
+`setup` creates a warehouse (`SIZING_BENCHMARK_WH`, X-Small, generation pinned)
+and a transient database (`SIZING_BENCHMARK_DB`), both commented
+`Keebo warehouse-sizing benchmark - safe to drop`. Every command refuses to touch
+a same-named object without that comment, and every command is safe to rerun.
+`cleanup` drops both.
 
 ## Requirements
 
-- A role that can **create a warehouse and a database** (for example
-  `SYSADMIN`). `setup` prints the role it's using.
-- For `report` only: access to `SNOWFLAKE.ACCOUNT_USAGE` (`ACCOUNTADMIN`, or
-  `IMPORTED PRIVILEGES` on the `SNOWFLAKE` database). `setup` warns up front if
-  the role can't read it.
-- **Optional:** the `SNOWFLAKE_SAMPLE_DATA` share, which most accounts have.
-  Without it, or without `IMPORTED PRIVILEGES` on it, `setup` generates an
-  equivalent table instead. An `ACCOUNTADMIN` can restore the share with
-  `CREATE DATABASE SNOWFLAKE_SAMPLE_DATA FROM SHARE SFC_SAMPLES.SAMPLE_DATA`.
-
-Nothing else is needed from the account: no default warehouse or database.
+- A role that can create a warehouse and a database (e.g. `SYSADMIN`).
+- For `report`: access to `SNOWFLAKE.ACCOUNT_USAGE` (`ACCOUNTADMIN`, or
+  `IMPORTED PRIVILEGES` on `SNOWFLAKE`). `setup` warns if it's missing.
+- Optional: the `SNOWFLAKE_SAMPLE_DATA` share, which most accounts have. Without
+  it, `setup` generates an equivalent 600M-row table.
 
 ## Credentials
 
-Pick whichever fits — no secrets are passed as flags:
+No secrets are passed as flags. Use whichever fits:
 
-**A named connection** from Snowflake's own `connections.toml` (the file the
-Snowflake CLI uses). If you already have one, just point at it:
+- **A named connection** from Snowflake's `connections.toml`:
+  `--connection mydemo`.
+- **`.env`**: copy the repo-root [`.env.example`](../../.env.example) to `.env`
+  and fill in `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD` (or
+  `SNOWFLAKE_AUTHENTICATOR=externalbrowser`), and `SNOWFLAKE_ROLE`.
+- **Prompts** for anything not supplied.
 
-```bash
-poetry run keebo-experiments warehouse-sizing run --connection mydemo
-```
-
-**Environment / `.env`.** Copy the repo-root
-[`.env.example`](../../.env.example) to `.env` and fill it in — the CLI loads it
-automatically:
-
-```bash
-cp .env.example .env
-# edit .env: SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PASSWORD (or
-# SNOWFLAKE_AUTHENTICATOR=externalbrowser for SSO), and SNOWFLAKE_ROLE.
-```
-
-**Prompts.** Anything not supplied by `--connection` or the environment is
-prompted for (the password with hidden input), so you can also just run a
-command and type the values when asked.
-
-> **MFA / SSO token caching.** If your account uses MFA or external-browser
-> SSO, each command opens its own connection and would otherwise re-prompt. The
-> project depends on `snowflake-connector-python[secure-local-storage]`, which
-> caches the token after the first approval so `setup` → `run` → `report` →
-> `cleanup` don't each pop a prompt (the account needs `ALLOW_CLIENT_MFA_CACHING`
-> for MFA).
->
-> The token is stored in your OS credential store, and `poetry install` pulls in
-> the right backend for your platform automatically — no configuration or
-> OS-specific setup:
->
-> - **Windows** — Windows Credential Manager. Silent; no extra prompt.
-> - **Linux (desktop)** — Secret Service (GNOME Keyring / KWallet); may ask once
->   to unlock the keyring.
-> - **macOS** — the login Keychain. The first run shows a system dialog asking
->   to authorize the Python binary's access to the cached token — click
->   **Always Allow** so later commands don't re-prompt. (A later Python upgrade
->   can make it ask once more, since the grant is tied to the binary.)
->
-> On a headless machine with no credential store, caching is simply skipped and
-> you'll be prompted per command — use `--connection`, env vars, key-pair, or
-> SSO for unattended runs.
+> **MFA / SSO.** Each command opens its own connection. The connector caches
+> the token in your OS credential store after the first approval, so later
+> commands don't prompt again (for MFA, the account needs
+> `ALLOW_CLIENT_MFA_CACHING`). On macOS, click **Always Allow** on the Keychain
+> dialog. Without a credential store, you're prompted per command.
 
 ## Usage
 
 ```bash
-# 1. Create the warehouse and database (Steps 1-3). Safe to rerun.
-poetry run keebo-experiments warehouse-sizing setup
-
-# 2. Sweep every size (Steps 4-9). Results print live as it finishes.
-poetry run keebo-experiments warehouse-sizing run
-
-# 3. Wait a few minutes for ACCOUNT_USAGE to catch up, then read the latest run
-#    (Steps 10-16): the sizing curve, disk spill, and billed credits.
-poetry run keebo-experiments warehouse-sizing report
-
-# 4. Drop everything setup created (Step 17).
-poetry run keebo-experiments warehouse-sizing cleanup
+poetry run keebo-experiments warehouse-sizing setup     # Steps 1-3: create the objects
+poetry run keebo-experiments warehouse-sizing run       # Steps 4-9: sweep; results print live
+poetry run keebo-experiments warehouse-sizing report    # Steps 10-16: billed numbers (a few minutes later)
+poetry run keebo-experiments warehouse-sizing cleanup   # Step 17: drop the objects
 ```
 
-See all options with `--help` (or `-h`) on any command.
+`run` ends with each size's runtime, spill, and credits, what the run cost, and
+the cheapest size per query. Options (see `--help`):
 
-`run` ends with a live table for each size: its cold and warm runtimes, local
-and remote spill, the cold query's credits, and what the size billed. Then it
-prints what the whole run cost and the cheapest size per query.
+- `run --size medium --size large` — a subset of sizes (repeatable).
+- `run --runs 5` — runs per size (run 1 is cold; default 3).
+- `run --table SNOWFLAKE_SAMPLE_DATA.TPCH_SF1000.LINEITEM` — 6B rows, ~10× the cost.
+- `run --max-credits 3` — the cost cap.
+- `setup --generation 2` — pin Gen2 (1.35× the rate; not in every region).
+- `report --run-id ID` — a specific run (`run` prints the id). By default
+  `report` reads the latest run `ACCOUNT_USAGE` has caught up with, and says so.
+- `--warehouse` / `--database` — different names (pass them to every command).
 
-### Useful options
-
-- `run --size medium --size large` — sweep only a subset of sizes
-  (repeatable). With exactly two, `run` adds a side-by-side verdict.
-- `run --runs 5` — runs per size (run 1 is cold, later runs warm; default 3).
-- `run --table SNOWFLAKE_SAMPLE_DATA.TPCH_SF1000.LINEITEM` — 6B rows for a
-  sharper curve at ~10x the cost. `TPCH_SF10` (60M rows) is too small to show
-  the effect.
-- `run --max-credits 3` — the run's hard cost cap (0.05–50).
-- `setup --generation 2` — pin Gen2 instead of Gen1. The cap and the live
-  credits use the Gen2 rate. Gen2 isn't available in every cloud region; there,
-  Snowflake rejects `setup` and Gen1 (the default) works. The report prices
-  its estimated-credit steps (12 and 14) at the warehouse's generation too.
-- `report --run-id 20260930-120000` — report a specific run (`run` prints its
-  id). By default `report` reads the latest run `ACCOUNT_USAGE` has caught up
-  with, and says so; right after a run that can still be the previous one.
-  `report --hours 48` widens the lookback (default 24).
-- `--warehouse MY_WH --database MY_DB` — use different names (on every
-  command).
-- `--connection NAME` — connect via a `connections.toml` entry instead of env.
-
-## Compare two sizes: the spillage demo
-
-Pick two sizes and one run each, and `run` becomes an A/B: the same query on an
-undersized and a right-sized warehouse.
+### Compare two sizes: the spillage demo
 
 ```bash
-poetry run keebo-experiments warehouse-sizing setup
 poetry run keebo-experiments warehouse-sizing run --size xsmall --size medium --runs 1
-poetry run keebo-experiments warehouse-sizing report     # the billed numbers, a few minutes later
-poetry run keebo-experiments warehouse-sizing cleanup
 ```
 
-The output ends with a verdict like this one. The numbers are made up to show
-the layout; yours will differ:
+With two sizes, `run` adds a verdict. The numbers below are made up to show the
+layout:
 
 ```
 --- The verdict (Medium vs X-Small) ---
@@ -196,75 +98,41 @@ the layout; yours will differ:
   remote spill (GB)         0.00     0.00     —
   credits per query         0.01944  0.01111  43% cheaper
   credits billed, this run  0.01944  0.06667  243% pricier
-
-Credits used by this run: about 0.086 (each size bills at least 60 seconds when it resumes). ...
 ```
 
-The Medium costs 4× as much per hour, but finishes 7× faster with no spill, so
-each query costs less. **This one run** still bills the Medium more, because
-Snowflake charges at least 60 seconds each time a warehouse resumes and the
-Medium needed only 10. On a warehouse that's already running, as with any
-real workload, the per-query number is the one that adds up. That minimum is
-its own talking point about account costs.
+The Medium costs 4× as much per hour, but finishes 7× faster without spilling,
+so each query costs less. This one run still bills it more, because a warehouse
+bills at least 60 seconds each time it resumes. On a warehouse that's already
+running, the per-query number is the one that adds up.
 
-What we saw rehearsing it on a Gen1 account:
-
-- **Local spill is easy to show.** On the default `TPCH_SF100`, an X-Small
-  spills tens of GB to local SSD, and a Medium spills a small fraction of that
-  while running several times faster. For a cleaner contrast, try
-  `--size xsmall --size large`.
-- **Remote spill is hard to reach on an X-Small.** Its local SSD absorbed more
-  than 200 GB from 6B groups, in a run of over 15 minutes, without spilling to
-  remote storage. With `--table ...TPCH_SF1000.LINEITEM`, expect heavy local
-  spill on both sizes rather than remote spill; a Medium then spills too, so
-  the contrast is weaker. `run` says so when a comparison misses.
-
-If the undersized size doesn't spill, or the right-sized one spills too, `run`
-suggests which way to change `--table` or `--size`.
+In rehearsal, an X-Small spilled tens of GB on the default table, and a Medium
+spilled a small fraction of that. Remote spill was out of reach: an X-Small's
+local SSD absorbed more than 200 GB. If a comparison misses, `run` suggests a
+different `--size` or `--table`.
 
 ## How it's measured
 
-- **Runtime** is Snowflake's own elapsed time for each query, from the
-  session's query history. The client's timing is only a fallback. Snowflake's
-  time is the reliable one: if your laptop sleeps mid-run, the client's clock
-  stops but the query doesn't.
-- **Spill** comes from `GET_QUERY_OPERATOR_STATS` for each size's cold run,
-  within seconds of the query finishing. `ACCOUNT_USAGE` can lag by minutes.
-- **`query_credits`** = the cold run's runtime × the size's credits/hour ÷
-  3600: the query's share of warehouse time. **`billed_credits`** is what the
-  size added to the bill: its runs back to back, with a 60-second floor, since
-  each size resumes the warehouse once.
-- `report` reads one run's timings, spill, and billed credits from
-  `ACCOUNT_USAGE`, filtered to the benchmark warehouse. Every query is tagged
-  `wsbench:<run id>:<size>:<attempt>`, so rehearsals don't mix in.
-- The result cache is turned off, and the warehouse is suspended between sizes
-  so each size starts with a cold cache.
-
-## How it maps to the article
-
-| Article steps | Command   |
-| ------------- | --------- |
-| 1–3           | `setup`   |
-| 4–9           | `run`     |
-| 10–16         | `report`  |
-| 17            | `cleanup` |
+- **Runtime** is Snowflake's elapsed time for each query (the client's clock is
+  a fallback). **Spill** comes from `GET_QUERY_OPERATOR_STATS` for each size's
+  cold run, seconds after it finishes.
+- **`query_credits`** is the cold run's runtime × the size's rate.
+  **`billed_credits`** is the size's runs back to back, with a 60-second floor.
+- `report` reads one run from `ACCOUNT_USAGE`, filtered to the benchmark
+  warehouse by its query tags (`wsbench:<run id>:<size>:<attempt>`).
+- The result cache is off, and the warehouse is suspended between sizes so each
+  size starts cold.
 
 ## Layout
 
-- `cli.py` — thin `click` command layer (credentials, connection, output).
-- `core/` — the domain logic, with no `click` dependency; each function takes an
-  open connection so it stays testable:
-  - `core/queries.py` — the SQL and constants: the workload, the fallback
-    table, the cost cap, the live stats, and the reporting queries.
-  - `core/infra.py` — create, check, and drop the warehouse and database
-    (Steps 1-3, 17).
-  - `core/sweep.py` — run the query on each size and read live stats
-    (Steps 4-9).
-  - `core/report.py` — the live table and verdict, and read the run back from
-    `ACCOUNT_USAGE` (Steps 10-16).
+- `cli.py` — the `click` commands (`setup`, `run`, `report`, `cleanup`).
+- `core/queries.py` — the SQL and constants: workload, fallback table, cost cap,
+  live stats, report.
+- `core/infra.py` — create, check, and drop the objects (Steps 1-3, 17).
+- `core/sweep.py` — run each size and read live stats (Steps 4-9).
+- `core/report.py` — the live tables and the `ACCOUNT_USAGE` report (Steps 10-16).
 
-It reuses the shared `common/warehouses.py` (sizes, credit rates, Gen2) and
-`common/dedicated.py` (find, claim, and drop the objects an experiment owns).
+Shared helpers: `common/warehouses.py` (sizes, rates) and `common/dedicated.py`
+(owned objects).
 
 ## Related
 
