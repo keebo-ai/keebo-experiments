@@ -69,24 +69,32 @@ Two rules do most of the work:
    (a fake connection) and reusable (a notebook, another experiment).
 
 When the domain logic grows past one comfortable module, group it under a
-`core/` subpackage instead — `core/queries.py`, `core/sweep.py`,
-`core/report.py`, etc. The `warehouse_sizing_benchmark` experiment does this;
-follow it when an experiment has that much surface, and keep the flat shape
-above when it doesn't.
+`core/` subpackage instead — `core/queries.py`, `core/infra.py` (setup and
+cleanup), `core/sweep.py`, `core/report.py`, etc. The
+`warehouse_sizing_benchmark` experiment does this; follow it when an
+experiment has that much surface, and keep the flat shape above when it
+doesn't.
 
 ### Conventions (match these)
 
 - **Cost and safety come first.** These run against *other people's* accounts.
   An experiment that uses compute works on a **dedicated** warehouse or
   resource that it creates itself, never touches existing objects, and ships a
-  `cleanup` command that removes whatever it created. The command docstring
+  `cleanup` command that removes whatever it created. Use `common/dedicated.py`
+  for this: create objects with an owner comment, check them with `claim`
+  (which refuses an object someone else made), and remove them with `drop`
+  (which only removes objects carrying that comment).
+  If setup takes a while, give it its own `setup` command and make setup,
+  run, and cleanup safe to rerun. The command docstring
   carries a `WARNING: this uses real compute ...` line with an honest cost
   estimate, and the README has a "Before you run it" section. Prefer the
   cheapest sizes and the free `SNOWFLAKE_SAMPLE_DATA` share. Add a spend cap or
   a confirmation prompt when a run could get expensive.
 
-- **Shared code** lives in `common/` (e.g. `common/snowflake.py`, the connection
-  client). Reach for it before writing your own; extend it if the next
+- **Shared code** lives in `common/`: `common/snowflake.py` (the connection
+  client), `common/warehouses.py` (sizes, credit rates, the 60-second
+  minimum), and `common/dedicated.py` (owned objects). Reach for it before
+  writing your own; extend it if the next
   experiment needs the same thing.
 - **Credentials** are never passed as flags. Use the shared helpers in
   `common/credentials.py` — `connection_option` (the `--connection` flag),
@@ -178,7 +186,7 @@ def <command>(connection_name: str | None) -> None:
 
 Then mount it on the shared CLI in `common/cli.py` (see step 2). Use a
 `@click.group()` instead of `@click.command()` if the experiment needs several
-subcommands (like `warehouse-sizing`'s `run` / `report` / `cleanup`).
+subcommands (like `warehouse-sizing`'s `setup` / `run` / `report` / `cleanup`).
 
 `tests/unit/experiments/<short_name>/test_<name>.py`:
 

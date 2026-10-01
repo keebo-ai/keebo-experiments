@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from common import warehouses
 from common.sql import validate_identifier
 
 # --------------------------------------------------------------------------- #
@@ -34,19 +35,12 @@ from common.sql import validate_identifier
 # made every candidate rule miss by just enough to be rejected. The rounding is
 # in the bill, not in the rate, so it belongs in the prediction.
 # --------------------------------------------------------------------------- #
-CREDITS_PER_HOUR: dict[str, float] = {
-    "XSMALL": 1.0,
-    "SMALL": 2.0,
-    "MEDIUM": 4.0,
-    "LARGE": 8.0,
-    "XLARGE": 16.0,
-    "XXLARGE": 32.0,
-}
+CREDITS_PER_HOUR: dict[str, float] = {keyword: float(credits) for keyword, _, credits in warehouses.SIZES}
 DEFAULT_SIZE = "XSMALL"
 
 STANDARD_GEN_1 = "STANDARD_GEN_1"
 STANDARD_GEN_2 = "STANDARD_GEN_2"
-GEN2_MULTIPLIER = 1.35
+GEN2_MULTIPLIER = warehouses.GEN2_MULTIPLIER
 DEFAULT_RESOURCE_CONSTRAINT = STANDARD_GEN_2
 RESOURCE_CONSTRAINTS: dict[str, float] = {STANDARD_GEN_1: 1.0, STANDARD_GEN_2: GEN2_MULTIPLIER}
 
