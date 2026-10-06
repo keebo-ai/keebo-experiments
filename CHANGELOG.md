@@ -1,3 +1,10 @@
+## v0.5.0 (2026-10-06)
+
+### Feat
+
+- **warehouse-sizing**: idempotent, isolated, cost-capped, with live results (replaces #29) (#33)
+- use the Snowflake default connection when --connection is omitted (#32)
+
 ## v0.4.0 (2026-09-17)
 
 ### Feat
