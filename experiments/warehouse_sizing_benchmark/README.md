@@ -51,11 +51,14 @@ than once. `cleanup` drops both.
 
 Credentials never go in flags. You can:
 
-- point at a named connection in Snowflake's `connections.toml` with
-  `--connection mydemo`,
+- point at a named connection in Snowflake's `config.toml` or `connections.toml`
+  with `--connection mydemo`,
 - copy [`.env.example`](../../.env.example) to `.env` and fill in
   `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD` (or
-  `SNOWFLAKE_AUTHENTICATOR=externalbrowser`), and `SNOWFLAKE_ROLE`, or
+  `SNOWFLAKE_AUTHENTICATOR=externalbrowser`), and `SNOWFLAKE_ROLE`,
+- do nothing, if you use the Snowflake CLI and have a default connection
+  (`[connections.default]` in `~/.snowflake/config.toml`). With no
+  `--connection` and no `SNOWFLAKE_ACCOUNT`, the CLI uses it and says so, or
 - run a command and answer the prompts.
 
 If you use MFA or SSO, you approve the first login and the connector caches the

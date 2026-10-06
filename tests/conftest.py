@@ -113,6 +113,17 @@ class FakeConnection:
         self.closed = True
 
 
+@pytest.fixture(autouse=True)
+def _no_machine_snowflake_config(monkeypatch):
+    """Keep tests hermetic: never read the developer's real Snowflake config.
+
+    Without this, a machine with a default connection set up would make any test
+    that omits --connection try to log in. Tests that need a default connection
+    patch ``common.snowflake._connector_config`` themselves.
+    """
+    monkeypatch.setattr("common.snowflake._connector_config", lambda: ("default", {}))
+
+
 @pytest.fixture
 def make_cursor():
     def _make(**kwargs: Any) -> FakeCursor:

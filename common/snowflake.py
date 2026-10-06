@@ -1,16 +1,18 @@
 """Shared Snowflake connection client for Keebo experiments.
 
-Credentials can come from three places; the CLI layer decides the precedence
-(named connection > environment > interactive prompt) and this module provides
-the pieces:
+Credentials can come from four places; the CLI layer decides the precedence
+(named connection > environment > default connection > interactive prompt) and
+this module provides the pieces:
 
-1. **A named connection** in Snowflake's own ``connections.toml`` (the file the
-   Snowflake CLI uses, at ``~/.snowflake/connections.toml`` or
-   ``~/.config/snowflake/connections.toml``). See :func:`connect_named`.
+1. **A named connection** from Snowflake's own config — the ``[connections]``
+   in ``config.toml`` or ``connections.toml``, the files the Snowflake CLI uses,
+   under ``~/.snowflake/`` (or ``SNOWFLAKE_HOME``). See :func:`connect_named`.
 2. **Environment variables** ``SNOWFLAKE_ACCOUNT`` / ``SNOWFLAKE_USER`` /
    ``SNOWFLAKE_PASSWORD`` / ``SNOWFLAKE_ROLE`` / ``SNOWFLAKE_AUTHENTICATOR``
    (loaded from ``.env`` by the CLI). See :func:`env_credentials`.
-3. **Interactive prompts** for anything still missing — that lives in the CLI,
+3. **The default connection** in that same config, if one is set up. See
+   :func:`default_connection_name`.
+4. **Interactive prompts** for anything still missing — that lives in the CLI,
    since prompting is a UI concern and this module stays free of it.
 
 Whichever the source, :func:`connection` hands experiment code an open
@@ -84,6 +86,27 @@ def _connector() -> Any:
     return connector
 
 
+def _connector_config() -> tuple[str, dict[str, Any]]:
+    """The connector's default connection name and its known connections."""
+    from snowflake.connector.config_manager import CONFIG_MANAGER  # noqa: PLC0415
+
+    return CONFIG_MANAGER["default_connection_name"], CONFIG_MANAGER["connections"]
+
+
+def default_connection_name() -> str | None:
+    """The name of Snowflake's default connection, or ``None`` if none is set up.
+
+    Resolved exactly as the connector resolves it: the ``default_connection_name``
+    setting, falling back to a connection called ``default``. A config that
+    can't be read counts as none, so the caller falls back to prompting.
+    """
+    try:
+        name, connections = _connector_config()
+    except Exception:  # an unreadable config means "no default connection"
+        return None
+    return name if name in connections else None
+
+
 def connect(creds: SnowflakeCredentials) -> Any:
     """Open a connection from explicit credentials.
 
@@ -99,7 +122,7 @@ def connect(creds: SnowflakeCredentials) -> Any:
 
 
 def connect_named(connection_name: str) -> Any:
-    """Open a connection from a named entry in Snowflake's ``connections.toml``."""
+    """Open a connection from a named entry in Snowflake's config (``config.toml`` / ``connections.toml``)."""
     return _connector().connect(connection_name=connection_name)
 
 
@@ -111,8 +134,8 @@ def connection(
 ) -> Iterator[Any]:
     """Yield an open connection and close it on exit.
 
-    Pass exactly one of ``creds`` (explicit settings) or ``connection_name`` (a
-    ``connections.toml`` entry).
+    Pass exactly one of ``creds`` (explicit settings) or ``connection_name`` (an
+    entry in Snowflake's config).
     """
     if (creds is None) == (connection_name is None):
         raise ValueError("Pass exactly one of `creds` or `connection_name`.")

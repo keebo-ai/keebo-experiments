@@ -60,10 +60,11 @@ def warehouse_sizing() -> None:
     The role needs CREATE WAREHOUSE and CREATE DATABASE, plus ACCOUNT_USAGE
     access for report.
 
-    Credentials: pass --connection NAME to use an entry from Snowflake's
-    connections.toml, or set SNOWFLAKE_ACCOUNT / SNOWFLAKE_USER /
+    Credentials: pass --connection NAME to use a connection from Snowflake's
+    config, or set SNOWFLAKE_ACCOUNT / SNOWFLAKE_USER /
     SNOWFLAKE_PASSWORD (or SNOWFLAKE_AUTHENTICATOR) / SNOWFLAKE_ROLE in the
-    environment or a .env file (see .env.example). Anything missing is prompted
+    environment or a .env file (see .env.example). With neither, your Snowflake
+    default connection is used if you have one. Anything missing is prompted
     for.
 
     WARNING: this runs real queries and costs credits. A full sweep (X-Small to

@@ -22,7 +22,9 @@ your own environment.
 # Install into a virtual environment
 poetry install
 
-# Configure your warehouse connection (git-ignored)
+# Configure your warehouse connection (git-ignored). Skip this if you already
+# have a Snowflake default connection (e.g. from the Snowflake CLI): it's used
+# automatically, or pass --connection NAME to pick another.
 cp .env.example .env && edit .env
 
 # List the experiments, then run one
@@ -55,7 +57,7 @@ Every experiment is a subcommand of the single `keebo-experiments` CLI.
 keebo-experiments/
 ├── common/        # shared machinery used by every experiment
 │   ├── cli.py         # the single `keebo-experiments` CLI (mounts each experiment)
-│   ├── credentials.py # resolve creds + open a connection (env / connections.toml / prompt)
+│   ├── credentials.py # resolve creds + open a connection (--connection / env / default connection / prompt)
 │   ├── render.py      # print report tables
 │   ├── tables.py      # the ReportTable data type
 │   └── snowflake.py   # Snowflake connection client (no click)

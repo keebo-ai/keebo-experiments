@@ -99,9 +99,11 @@ doesn't.
 - **Credentials** are never passed as flags. Use the shared helpers in
   `common/credentials.py` — `connection_option` (the `--connection` flag),
   `open_connection(connection_name)`, and `resolve_credentials()` — which
-  resolve, in order, from a `--connection NAME` entry in Snowflake's
-  `connections.toml`, then `SNOWFLAKE_*` env vars / `.env` (via `python-dotenv`),
-  then an interactive prompt for anything missing. See the warehouse
+  resolve, in order, from a `--connection NAME` entry in Snowflake's config
+  (`config.toml` / `connections.toml`), then `SNOWFLAKE_*` env vars / `.env`
+  (via `python-dotenv`) when `SNOWFLAKE_ACCOUNT` is set, then the Snowflake
+  default connection if one is set up, then an interactive prompt for anything
+  missing. See the warehouse
   experiment's `cli.py`. Add any new env vars to `.env.example`. Never commit
   real secrets.
 - **Run output** stays out of git. Anything an experiment writes — result files,
