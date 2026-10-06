@@ -41,11 +41,11 @@ def warehouse_sizing() -> None:
         keebo-experiments warehouse-sizing report    # read timings + credits back (wait a few min)
         keebo-experiments warehouse-sizing cleanup   # drop the benchmark warehouse
 
-    Credentials: pass --connection NAME to use an entry from Snowflake's
-    connections.toml, or set SNOWFLAKE_ACCOUNT / SNOWFLAKE_USER /
-    SNOWFLAKE_PASSWORD (or SNOWFLAKE_AUTHENTICATOR) / SNOWFLAKE_ROLE in the
-    environment or a .env file (see .env.example). Anything missing is prompted
-    for. SNOWFLAKE_ROLE needs ACCOUNT_USAGE access for the report.
+    Credentials: pass --connection NAME to use a connection from Snowflake's
+    config, or set SNOWFLAKE_ACCOUNT / SNOWFLAKE_USER / SNOWFLAKE_PASSWORD (or
+    SNOWFLAKE_AUTHENTICATOR) / SNOWFLAKE_ROLE in the environment or a .env file
+    (see .env.example). With neither, your Snowflake default connection is used
+    if you have one; anything still missing is prompted for. SNOWFLAKE_ROLE needs ACCOUNT_USAGE access for the report.
 
     WARNING: this uses real compute. The full X-Small to 2X-Large sweep bills
     about 1.3 credits against TPCH_SF100.

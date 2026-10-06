@@ -84,3 +84,30 @@ def test_connection_closes_on_exit(monkeypatch):
         assert not conn.closed
 
     assert conn.closed
+
+
+def test_default_connection_name_when_configured(monkeypatch):
+    monkeypatch.setattr(sf, "_connector_config", lambda: ("default", {"default": {}, "other": {}}))
+    assert sf.default_connection_name() == "default"
+
+
+def test_default_connection_name_is_none_when_the_named_default_is_missing(monkeypatch):
+    # e.g. default_connection_name = "work" but no [connections.work]
+    monkeypatch.setattr(sf, "_connector_config", lambda: ("work", {"default": {}}))
+    assert sf.default_connection_name() is None
+
+
+def test_default_connection_name_is_none_when_the_config_is_unreadable(monkeypatch):
+    def broken():
+        raise OSError("bad permissions")
+
+    monkeypatch.setattr(sf, "_connector_config", broken)
+    assert sf.default_connection_name() is None
+
+
+def test_connector_config_reads_the_real_connector(monkeypatch):
+    # The seam itself: undo the hermetic patch and check it returns (name, mapping).
+    monkeypatch.undo()
+    name, connections = sf._connector_config()
+    assert isinstance(name, str)
+    assert hasattr(connections, "keys")
