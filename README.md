@@ -37,9 +37,12 @@ Every experiment is a subcommand of the single `keebo-experiments` CLI.
 ## Available experiments
 
 - [**warehouse-sizing**](./experiments/warehouse_sizing_benchmark/) — sweeps one
-  fixed query across every Snowflake warehouse size and reads the timings and
-  credits back from `ACCOUNT_USAGE`, so you can plot your own sizing curve and
-  find the cost sweet spot.
+  fixed query across Snowflake warehouse sizes, shows each size's runtime,
+  disk spill, and credits live, and reads the billed credits back from
+  `ACCOUNT_USAGE`, so you can plot your own sizing curve and find the cost
+  sweet spot. Pick two sizes for a side-by-side of what spill costs (the
+  spillage webinar demo). It creates and drops its own warehouse and database,
+  and caps each run's credits.
   Run: `poetry run keebo-experiments warehouse-sizing --help`.
 - [**multi-cluster-billing**](./experiments/multi_cluster_billing/) — settles
   whether Snowflake's 60-second billing minimum applies once per warehouse start

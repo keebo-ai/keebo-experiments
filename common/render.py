@@ -19,7 +19,8 @@ def table_lines(table: ReportTable) -> list[str]:
     into a persisted report file, without the column-width math living in two
     places.
     """
-    lines = ["", f"--- Step {table.step}. {table.title} ---"]
+    heading = table.title if table.step is None else f"Step {table.step}. {table.title}"
+    lines = ["", f"--- {heading} ---"]
     if not table.rows:
         return [*lines, "  (no rows yet — ACCOUNT_USAGE may still be catching up)"]
 

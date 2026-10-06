@@ -111,3 +111,17 @@ def test_connector_config_reads_the_real_connector(monkeypatch):
     name, connections = sf._connector_config()
     assert isinstance(name, str)
     assert hasattr(connections, "keys")
+
+
+def test_rows_keys_columns_by_lower_case_name(make_cursor):
+    cursor = make_cursor(fetch=[("MY_WH", "mine")], description=[("NAME",), ("COMMENT",)])
+    cursor.execute("SHOW WAREHOUSES")
+    assert sf.rows(cursor) == [{"name": "MY_WH", "comment": "mine"}]
+
+
+def test_is_statement_timeout_checks_snowflakes_error_number():
+    class Timeout(Exception):
+        errno = 630
+
+    assert sf.is_statement_timeout(Timeout())
+    assert not sf.is_statement_timeout(RuntimeError("boom"))

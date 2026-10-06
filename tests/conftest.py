@@ -12,16 +12,24 @@ statement repeatedly and submits queries asynchronously:
   a test can say "the third poll shows two clusters".
 - ``execute_async`` / ``get_query_status`` / ``is_still_running`` mirror the
   connector's async API, with per-query-id queues of "still running?" answers.
+
+And one for experiments that issue many different statements:
+
+- ``route`` is a function from the SQL text to a ``(rows, description)`` pair,
+  or ``None`` to fall through to ``responses`` / ``fetch``. It answers by what
+  was asked rather than by call order.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
 
 Rows = list[tuple[Any, ...]]
 Description = list[tuple[Any, ...]]
+Route = Callable[[str], "tuple[Rows, Description] | None"]
 
 
 class FakeCursor:
@@ -31,6 +39,7 @@ class FakeCursor:
         fetch: Rows | None = None,
         description: Description | None = None,
         responses: list[tuple[Rows, Description]] | None = None,
+        route: Route | None = None,
         connection: FakeConnection | None = None,
     ) -> None:
         self.executed: list[str] = []
@@ -38,13 +47,19 @@ class FakeCursor:
         self._default_description = list(description) if description is not None else [("col",)]
         self.description = list(self._default_description)
         self._responses = list(responses) if responses else []
+        self._route = route
         self._current: Rows = list(self._fetch)
         self.sfqid = "fake-query-id"
         self.closed = False
         self.connection = connection
 
-    def _advance(self) -> None:
-        if self._responses:
+    def _advance(self, sql: str) -> None:
+        routed = self._route(sql) if self._route else None
+        if routed is not None:
+            rows, description = routed
+            self._current = list(rows)
+            self.description = list(description)
+        elif self._responses:
             rows, description = self._responses.pop(0)
             self._current = list(rows)
             self.description = list(description)
@@ -54,12 +69,12 @@ class FakeCursor:
 
     def execute(self, sql: str, *args: Any) -> FakeCursor:
         self.executed.append(sql)
-        self._advance()
+        self._advance(sql)
         return self
 
     def execute_async(self, sql: str, *args: Any) -> FakeCursor:
         self.executed.append(sql)
-        self._advance()
+        self._advance(sql)
         if self.connection is not None:
             self.sfqid = self.connection.next_query_id()
         return self
