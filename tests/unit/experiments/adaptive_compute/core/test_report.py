@@ -149,7 +149,8 @@ def test_read_report_reads_the_latest_run_on_the_home_warehouse(account):
     assert summary.run_id == RUN_ID
     assert f"USE WAREHOUSE {OBJECTS.warehouse}" in cursor.executed
     assert f"ALTER WAREHOUSE {OBJECTS.warehouse} SUSPEND" in cursor.executed
-    assert [t.step for t in summary.tables] == [1, 2, 3]
+    assert [t.step for t in summary.tables] == [1, 2, 3, 4]
+    assert summary.workload_comparisons == []
     assert len(summary.cells) == 6
     assert len(summary.comparisons) == 6  # 2 sizes x 3 pairs
     assert any(line.startswith("sequential, Adaptive vs Gen1: faster at X-Small, Small") for line in summary.lines)
@@ -245,3 +246,106 @@ def test_a_single_cluster_concurrent_estimate_is_not_a_lower_bound():
     c = _cell_run(queries.GEN1, 10.0, workload=queries.CONCURRENT)
     assert report._lower_bound(c, 2) is True
     assert report._lower_bound(c, 1) is False
+
+
+def test_aggregate_carries_where_the_time_went_and_the_spill():
+    rows = [
+        dict(zip(_columns(), cell_row("monster", "XSMALL", "gen1", compile_s=2.5, exec_s=80.0,
+                                      spilled_local_gb=1.5, spilled_remote_gb=0.25), strict=True))
+    ]  # fmt: skip
+
+    (cell,) = report.aggregate(rows, billed={}, metered={})
+
+    assert (cell.compile_s, cell.exec_s, cell.spilled_local_gb, cell.spilled_remote_gb) == (2.5, 80.0, 1.5, 0.25)
+    table = report._cells_table([cell])
+    row = dict(zip(table.columns, table.rows[0], strict=True))
+    assert (row["compile (s)"], row["exec (s)"], row["spill local GB"], row["spill remote GB"]) == (
+        "2.5", "80.0", "1.50", "0.25",
+    )  # fmt: skip
+
+
+def _monster_account(account):
+    cells, metering = [], {}
+    for workload, wall in (("monster", 40.0), ("monster-split", 20.0)):
+        for config in ("gen1", "adaptive"):
+            row = cell_row(workload, "SMALL", config, wall_s=wall, busy_s=wall, floor_s=60.0,
+                           compile_s=12.0 if workload == "monster" else 0.5, exec_s=wall - 4)  # fmt: skip
+            cells.append(row)
+            metering[row[1]] = 2 * 60 / 3600 if config == "gen1" else wall / 1000
+    return account(cells=cells, metering=metering)
+
+
+def test_monster_split_is_set_against_monster_on_the_same_config_and_size(account):
+    _cursor, conn, _fake = _monster_account(account)
+
+    summary = report.read_report(conn, objects=OBJECTS)
+
+    pairs = summary.workload_comparisons
+    assert [(c.workload, c.against, c.challenger.key, c.baseline.key) for c in pairs] == [
+        ("monster-split", "monster", "gen1", "gen1"),
+        ("monster-split", "monster", "adaptive", "adaptive"),
+    ]
+    assert pairs[0].speedup == pytest.approx(2.0)
+    assert pairs[0].breakeven_busy is None  # same configuration: no break-even
+    titles = [t.title for t in summary.tables]
+    assert titles[2].startswith("Step 2b. Split vs one statement")
+    assert summary.tables[2].rows[0][:4] == ("monster-split vs monster", "Small", "Gen1", "2.0x faster")
+    assert "monster-split vs monster, on Adaptive: faster at Small; cheaper as a fresh warehouse at Small." in (
+        summary.lines
+    )
+    assert any("spent at least a quarter as long compiling as executing" in line for line in summary.lines)
+
+
+def test_the_csvs_carry_the_workload_pairs_and_the_new_columns(account):
+    _cursor, conn, _fake = _monster_account(account)
+    summary = report.read_report(conn, objects=OBJECTS)
+
+    cells, comparisons = report.csv_rows(summary)
+
+    assert {len(r) for r in cells} == {len(report.CELL_CSV_COLUMNS)}
+    assert {len(r) for r in comparisons} == {len(report.COMPARISON_CSV_COLUMNS)}
+    against = report.COMPARISON_CSV_COLUMNS.index("baseline_workload")
+    # monster's own Adaptive vs Gen1, then monster-split's, then the two workload pairs.
+    assert [r[against] for r in comparisons] == ["monster", "monster-split", "monster", "monster"]
+    compile_s = report.CELL_CSV_COLUMNS.index("compile_s")
+    assert cells[0][compile_s] == 12.0
+
+
+def test_the_frontier_keeps_only_cells_nothing_beats_on_both_time_and_cost():
+    cheap_slow = _stats(queries.GEN1, workload="monster", size="XSMALL", wall_s=100, billed=0.03)
+    dear_fast = _stats(queries.ADAPTIVE, workload="monster", size="XLARGE", wall_s=10, billed=0.2)
+    beaten = _stats(queries.GEN2, workload="monster", size="SMALL", wall_s=120, billed=0.05)
+    other_workload = _stats(queries.GEN2, workload="single", wall_s=500, billed=0.9)
+    failed = _stats(queries.GEN1, workload="monster", wall_s=1, billed=0.001, failed=1)
+    waiting = _stats(queries.GEN1, workload="monster", size="MEDIUM", wall_s=5)
+
+    cells = [cheap_slow, dear_fast, beaten, other_workload, failed, waiting]
+    assert report.frontier(cells) == {cheap_slow, dear_fast, other_workload}
+
+    table = report._frontier_table(cells)
+    assert table.step == 4
+    monster_rows = [row for row in table.rows if row[0] == "monster"]
+    assert [(row[1], row[-1]) for row in monster_rows] == [
+        ("Small", ""),  # the failed one, ordered by bill but never on the frontier
+        ("X-Small", "yes"),
+        ("Small", ""),
+        ("X-Large", "yes"),
+    ]
+
+
+def test_monster_split_estimates_are_exact_on_one_cluster():
+    c = _cell_run(queries.GEN1, 10.0, workload=queries.MONSTER_SPLIT)
+    assert report._lower_bound(c, 4) is False
+    assert report._lower_bound(c, 4, 2) is True
+
+
+def test_the_live_summary_warns_about_mismatched_answers():
+    result = run.RunResult(
+        run_id=RUN_ID,
+        scale=10,
+        max_clusters=2,
+        throughput_multiplier=2,
+        cells=(_cell_run(queries.GEN1, 10.0, workload=queries.MONSTER),),
+        mismatched_answers=("monster-split / X-Small / Gen1",),
+    )
+    assert any(line.startswith("WARNING: these monster cells") for line in report.live_summary_lines(result))

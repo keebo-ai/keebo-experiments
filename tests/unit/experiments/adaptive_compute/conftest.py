@@ -29,6 +29,13 @@ CELL_COLUMNS = [
     "wall_s",
     "elapsed_s",
     "queued_s",
+    "compile_s",
+    "exec_s",
+    "provisioning_s",
+    "overload_s",
+    "spilled_local_gb",
+    "spilled_remote_gb",
+    "cloud_services_credits",
     "clusters",
     "busy_s",
     "floor_s",
@@ -52,6 +59,13 @@ def cell_row(workload: str, size: str, config: str, replicate: int = 1, **values
         "wall_s": 10.0,
         "elapsed_s": 10.0,
         "queued_s": 0.0,
+        "compile_s": 0.1,
+        "exec_s": 9.9,
+        "provisioning_s": 0.0,
+        "overload_s": 0.0,
+        "spilled_local_gb": 0.0,
+        "spilled_remote_gb": 0.0,
+        "cloud_services_credits": 0.0,
         "clusters": 1,
         "busy_s": 10.0,
         "floor_s": 60.0,
@@ -79,6 +93,9 @@ class FakeAccount:
     # Statements to fail: a SQL fragment -> what to do with each matching statement, in order:
     # an exception to raise, or None to let that one through.
     fail: dict[str, list[Exception | None]] = field(default_factory=dict)
+    # What the monster workloads' final SELECT returns: (keys, total, fingerprint).
+    answer: tuple[Any, ...] = (25, 1000, 123456789)
+    split_answer: tuple[Any, ...] | None = None  # monster-split's, if it should differ
 
     def route(self, sql: str):
         for fragment, outcomes in self.fail.items():
@@ -111,6 +128,10 @@ class FakeAccount:
                 return [("LINEITEM",)], [("name",)]
             name = re.search(r"LIKE '([^']*)'", sql).group(1)
             return ([(name,)] if self.base_table else []), [("name",)]
+        if "AS fingerprint FROM" in sql and not sql.startswith("CREATE"):
+            split = "FULL OUTER JOIN " + OBJECTS.database in sql
+            answer = self.split_answer if split and self.split_answer is not None else self.answer
+            return [answer], [("KEYS",), ("TOTAL",), ("FINGERPRINT",)]
         if sql == "SELECT CURRENT_ROLE()":
             return [("SYSADMIN",)], [("CURRENT_ROLE()",)]
         if "MAX(SPLIT_PART(query_tag" in sql:

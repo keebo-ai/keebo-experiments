@@ -12,6 +12,7 @@ statement repeatedly and submits queries asynchronously:
   a test can say "the third poll shows two clusters".
 - ``execute_async`` / ``get_query_status`` / ``is_still_running`` mirror the
   connector's async API, with per-query-id queues of "still running?" answers.
+  ``get_results_from_sfqid`` reads back the rows an async query was answered with.
 
 And one for experiments that issue many different statements:
 
@@ -52,6 +53,7 @@ class FakeCursor:
         self.sfqid = "fake-query-id"
         self.closed = False
         self.connection = connection
+        self._async_results: dict[str, Rows] = {}
 
     def _advance(self, sql: str) -> None:
         routed = self._route(sql) if self._route else None
@@ -77,6 +79,11 @@ class FakeCursor:
         self._advance(sql)
         if self.connection is not None:
             self.sfqid = self.connection.next_query_id()
+        self._async_results[self.sfqid] = list(self._current)
+        return self
+
+    def get_results_from_sfqid(self, query_id: str) -> FakeCursor:
+        self._current = list(self._async_results.get(query_id, []))
         return self
 
     def fetchall(self) -> Rows:

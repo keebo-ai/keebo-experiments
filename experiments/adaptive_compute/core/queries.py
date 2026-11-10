@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass
 
 from common.sql import validate_name
+from experiments.adaptive_compute.core import monster
 
 DEFAULT_WAREHOUSE = "ADAPTIVE_COMPUTE_WH"
 DEFAULT_DATABASE = "ADAPTIVE_COMPUTE_DB"
@@ -56,6 +57,10 @@ DEFAULT_THROUGHPUT_MULTIPLIER = 2
 # The standard warehouses' cluster cap for the concurrent workload. Every other
 # workload runs one query at a time, so it never needs a second cluster.
 DEFAULT_MAX_CLUSTERS = 2
+# monster-split submits its branches at once too, but on one cluster by
+# default, so it measures concurrency inside one warehouse against parallelism
+# inside one statement. --max-clusters, if given, sets both.
+DEFAULT_SPLIT_MAX_CLUSTERS = 1
 
 # --------------------------------------------------------------------------- #
 # The data: Snowflake's free TPC-H sample share
@@ -328,7 +333,7 @@ ORDER BY cntrycode""",
 }
 
 # --------------------------------------------------------------------------- #
-# The five workloads, after the select.dev article
+# The workloads: five after the select.dev article, and two opt-in "monster" ones
 #
 # Each is a fixed list of statements. ``prepare`` runs before the cell's
 # warehouse is used and ``teardown`` after; both are metadata-only (a zero-copy
@@ -347,6 +352,17 @@ class Workload:
     concurrent: bool  # submit every statement at once, rather than one after another
     does: str
     why: str
+    # Its share of the cost cap, relative to the other cells in the run. Every
+    # select.dev workload weighs 1, so without a monster workload the budget
+    # splits evenly per cell, as it always has.
+    weight: float = 1.0
+    # The longest one cell of it may run; None means MAX_WALL_SECONDS.
+    max_wall_s: int | None = None
+    # Its statements run in stages: everything in a stage at once, each stage
+    # after the one before. Implies ``concurrent``.
+    staged: bool = False
+    # Every cell of it returns the same one-row answer, which run compares.
+    fingerprinted: bool = False
 
 
 SINGLE = Workload(
@@ -386,12 +402,64 @@ CTAS = Workload(
     "Two CREATE TABLE AS SELECTs: a narrow copy of LINEITEM, then LINEITEM joined to ORDERS and CUSTOMER.",
     "The transform case: big scans and big writes.",
 )
-WORKLOADS = (SINGLE, SEQUENTIAL, CONCURRENT, DML, CTAS)
+MONSTER = Workload(
+    "monster",
+    "MON",
+    False,
+    "One long statement: a wide DAG of CTEs (16 independent branches by default, each a moderate aggregation "
+    "and rejoin over a different table or date window), combined layer by layer down to one row.",
+    "The dbt or BI-tool case: one statement with dozens of CTEs, most of them independent. Can a warehouse run "
+    "the branches in parallel, and does Adaptive give one such statement more than its size?",
+    weight=3.0,
+    max_wall_s=3600,
+    fingerprinted=True,
+)
+MONSTER_SPLIT = Workload(
+    "monster-split",
+    "MSP",
+    True,
+    "The same logic as monster, dbt-style: each branch a CREATE TEMPORARY TABLE, all submitted at once, then one "
+    "statement that combines them.",
+    "Against monster: does Adaptive's advantage come from parallelism inside one statement, or from concurrency "
+    "across statements?",
+    weight=3.0,
+    max_wall_s=3600,
+    staged=True,
+    fingerprinted=True,
+)
+# What `run` measures unless --workload says otherwise. The monster workloads are opt-in.
+DEFAULT_WORKLOADS = (SINGLE, SEQUENTIAL, CONCURRENT, DML, CTAS)
+WORKLOADS = (*DEFAULT_WORKLOADS, MONSTER, MONSTER_SPLIT)
 WORKLOADS_BY_KEY = {workload.key: workload for workload in WORKLOADS}
+# The report sets each monster-split cell against the monster cell of the same size and config.
+WORKLOAD_PAIRS = ((MONSTER_SPLIT, MONSTER),)
+DEFAULT_FANOUT = monster.DEFAULT_FANOUT
 
 
-def workload_statements(workload: Workload, *, schema: str, table: str, base: str) -> list[tuple[str, str]]:
+def workload_stages(
+    workload: Workload, *, schema: str, table: str, base: str, fanout: int = DEFAULT_FANOUT
+) -> list[list[tuple[str, str]]]:
+    """A concurrent workload's statements in stages: each stage all at once, after the one before.
+
+    The concurrent workload is one stage. monster-split is two: every branch
+    into its own temporary table, then the statement that combines them.
+    """
+    if workload is MONSTER_SPLIT:
+        return monster.render_stages(monster.build_dag(schema, fanout=fanout), prefix=table)
+    if not workload.concurrent:
+        raise ValueError(f"the {workload.key} workload runs one statement at a time, not in stages")
+    return [workload_statements(workload, schema=schema, table=table, base=base, fanout=fanout)]
+
+
+def workload_statements(
+    workload: Workload, *, schema: str, table: str, base: str, fanout: int = DEFAULT_FANOUT
+) -> list[tuple[str, str]]:
     """The ``(name, sql)`` statements a workload runs on the cell's warehouse, in order."""
+    if workload is MONSTER:
+        return [("monster", monster.render_monolithic(monster.build_dag(schema, fanout=fanout)))]
+    if workload is MONSTER_SPLIT:
+        stages = workload_stages(workload, schema=schema, table=table, base=base, fanout=fanout)
+        return [statement for stage in stages for statement in stage]
     if workload is SINGLE:
         return [("q01", TPCH["q01"].format(s=schema))]
     if workload in (SEQUENTIAL, CONCURRENT):
@@ -426,8 +494,13 @@ def prepare_statements(workload: Workload, *, table: str, base: str) -> list[str
     return [f"CREATE TABLE {table} CLONE {base}"] if workload is DML else []
 
 
-def teardown_statements(workload: Workload, *, table: str) -> list[str]:
+def teardown_statements(workload: Workload, *, table: str, fanout: int = DEFAULT_FANOUT) -> list[str]:
     """Metadata-only statements to run after the workload, whether or not it finished."""
+    if workload is MONSTER_SPLIT:
+        # Temporary tables would last as long as the run's session, across every cell. Drop them now.
+        return [
+            f"DROP TABLE IF EXISTS {monster.branch_table(table, monster.branch_name(index))}" for index in range(fanout)
+        ]
     if workload is DML:
         return [f"DROP TABLE IF EXISTS {table}"]
     if workload is CTAS:
@@ -544,11 +617,25 @@ WHERE query_tag LIKE 'adcomp:%'
 # query's end. Summed over clusters, ``busy_s`` is what the work costs on a
 # standard warehouse that's already running, and ``floor_s`` (each cluster's
 # busy time, 60 seconds at least) is what a fresh one should bill for it.
+#
+# Where the time went, summed over the cell's statements: ``compile_s`` runs in
+# cloud services, before the warehouse sees the query, and long SQL can be
+# compile-bound; ``exec_s`` is on the warehouse; the two queue times say whether
+# it waited for a warehouse to start or for room on one. Spill shows a warehouse
+# that ran out of memory (local) or local disk (remote). Cloud services credits
+# are the per-query figure, before Snowflake's daily 10% adjustment.
 CELLS_SQL = f"""
 WITH q AS (
     SELECT query_tag, warehouse_name, COALESCE(cluster_number, 0) AS cluster_number, start_time, end_time,
            total_elapsed_time / 1000.0                                     AS elapsed_s,
            (queued_overload_time + queued_provisioning_time) / 1000.0      AS queued_s,
+           compilation_time / 1000.0                                       AS compile_s,
+           execution_time / 1000.0                                         AS exec_s,
+           queued_provisioning_time / 1000.0                               AS provisioning_s,
+           queued_overload_time / 1000.0                                   AS overload_s,
+           COALESCE(bytes_spilled_to_local_storage, 0)                     AS spilled_local,
+           COALESCE(bytes_spilled_to_remote_storage, 0)                    AS spilled_remote,
+           COALESCE(credits_used_cloud_services, 0)                        AS cloud_services,
            execution_status = 'SUCCESS'                                    AS ok,
            query_hash
     FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
@@ -572,6 +659,13 @@ SELECT q.query_tag,
        DATEDIFF('millisecond', MIN(q.start_time), MAX(q.end_time)) / 1000.0     AS wall_s,
        SUM(q.elapsed_s)                                                         AS elapsed_s,
        SUM(q.queued_s)                                                          AS queued_s,
+       SUM(q.compile_s)                                                         AS compile_s,
+       SUM(q.exec_s)                                                            AS exec_s,
+       SUM(q.provisioning_s)                                                    AS provisioning_s,
+       SUM(q.overload_s)                                                        AS overload_s,
+       SUM(q.spilled_local) / POWER(1024, 3)                                    AS spilled_local_gb,
+       SUM(q.spilled_remote) / POWER(1024, 3)                                   AS spilled_remote_gb,
+       SUM(q.cloud_services)                                                    AS cloud_services_credits,
        ANY_VALUE(c.clusters)                                                    AS clusters,
        ANY_VALUE(c.busy_s)                                                      AS busy_s,
        ANY_VALUE(c.floor_s)                                                     AS floor_s

@@ -180,3 +180,59 @@ def test_cleanup_everything(runner, account):
     result = _invoke(runner, "cleanup", "--everything", "--yes")
     assert result.exit_code == 0, result.output
     assert fake.warehouses == {}
+
+
+def test_a_default_run_leaves_the_monster_workloads_out(runner, account):
+    cursor, conn, _fake = account()
+    _stub_connection(conn)
+
+    result = _invoke(runner, "run", input="n\n")
+
+    assert "creates 45 warehouses" in result.output
+    assert cursor.executed == []
+
+
+def test_run_help_says_the_monster_workloads_are_opt_in(runner):
+    result = runner.invoke(cli_module.adaptive_compute, ["run", "--help"])
+    assert result.exit_code == 0
+    assert "monster and monster-split are opt-in" in result.output
+    assert "--adaptive-ceiling" in result.output and "--fanout" in result.output
+
+
+def test_run_the_monster_workloads_with_a_ceiling(runner, account):
+    cursor, conn, _fake = account()
+    _stub_connection(conn)
+
+    result = _invoke(
+        runner, "run", "--workload", "monster", "--workload", "monster-split", "--size", "xsmall",
+        "--config", "gen1", "--adaptive-ceiling", "xlarge", "--fanout", "4", "--yes",
+    )  # fmt: skip
+
+    assert result.exit_code == 0, result.output
+    creates = [s for s in cursor.executed if s.startswith("CREATE WAREHOUSE")]
+    assert len(creates) == 4  # Gen1 X-Small and Adaptive X-Large, for each workload
+    assert sum("MAX_QUERY_PERFORMANCE_LEVEL = XLARGE" in s for s in creates) == 2
+    assert not any("MAX_CLUSTER_COUNT" in s for s in creates)
+    assert sum(s.startswith("CREATE TEMPORARY TABLE") for s in cursor.executed) == 2 * 4
+
+
+def test_max_clusters_given_sets_monster_split_too(runner, account):
+    cursor, conn, _fake = account()
+    _stub_connection(conn)
+
+    result = _invoke(
+        runner, "run", "--workload", "monster-split", "--workload", "concurrent", "--size", "xsmall",
+        "--config", "gen2", "--max-clusters", "3", "--fanout", "2", "--yes",
+    )  # fmt: skip
+
+    assert result.exit_code == 0, result.output
+    creates = [s for s in cursor.executed if s.startswith("CREATE WAREHOUSE")]
+    assert sum("MAX_CLUSTER_COUNT = 3" in s for s in creates) == 2
+
+
+def test_run_rejects_a_fanout_out_of_range(runner, account):
+    _cursor, conn, _fake = account()
+    _stub_connection(conn)
+    result = _invoke(runner, "run", "--workload", "monster", "--fanout", "1", "--yes")
+    assert result.exit_code == 2
+    assert "--fanout" in result.output

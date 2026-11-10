@@ -169,3 +169,126 @@ def test_estimates_cover_standard_warehouses_only():
     assert cell.estimated_credits == pytest.approx(2 * 60 / 3600, abs=1e-5)  # the 60-second minimum
     adaptive = run.CellRun(**{**cell.__dict__, "cell": plan.Cell(queries.SINGLE, "SMALL", queries.ADAPTIVE)})
     assert adaptive.estimated_credits is None
+
+
+# --------------------------------------------------------------------------- #
+# The monster workloads
+# --------------------------------------------------------------------------- #
+def _split_statements(cursor):
+    return [s for s in cursor.executed if s.startswith("CREATE TEMPORARY TABLE") or "HASH_AGG" in s]
+
+
+def test_monster_runs_one_long_statement_and_keeps_its_answer(account, clock):
+    cursor, conn, fake = account()
+
+    result = _run(conn, _cells(queries.MONSTER, configs=[queries.GEN1]), clock, fanout=4)
+
+    (statement,) = [s for s in cursor.executed if "HASH_AGG" in s]
+    assert statement.startswith("WITH b01_a AS (") and "TPCH_SF10.lineitem" in statement
+    cell = result.cells[0]
+    assert (cell.statements, cell.succeeded, cell.answer) == (1, 1, fake.answer)
+    assert not any("MAX_CLUSTER_COUNT" in s for s in cursor.executed)
+
+
+def test_monster_split_writes_every_branch_before_combining_them_then_drops_them(account, clock):
+    cursor, conn, _fake = account()
+    messages: list[str] = []
+
+    result = _run(conn, _cells(queries.MONSTER_SPLIT, configs=[queries.GEN2]), clock, fanout=4, echo=messages.append)
+
+    cell = result.cells[0]
+    table = cell.cell.table(OBJECTS.database, RUN_ID)
+    statements = _split_statements(cursor)
+    assert [s.split(" AS")[0] for s in statements[:4]] == [f"CREATE TEMPORARY TABLE {table}_B0{i}" for i in range(1, 5)]
+    assert statements[4].startswith("WITH c1_01 AS (")
+    assert (cell.statements, cell.succeeded, cell.failed, cell.capped) == (5, 5, 0, 0)
+    assert cell.answer is not None
+    assert any("stage 1/2: submitted 4 statements at once" in m for m in messages)
+    drops = [f"DROP TABLE IF EXISTS {table}_B0{i}" for i in range(1, 5)]
+    assert all(cursor.executed.index(d) > cursor.executed.index(statements[4]) for d in drops)
+    # One cluster by default: a comparison inside one warehouse.
+    assert not any("MAX_CLUSTER_COUNT" in s for s in cursor.executed)
+
+
+def test_monster_split_can_have_more_clusters(account, clock):
+    cursor, conn, _fake = account()
+    _run(conn, _cells(queries.MONSTER_SPLIT, configs=[queries.GEN1]), clock, fanout=2, split_max_clusters=3)
+    assert any("MAX_CLUSTER_COUNT = 3" in s for s in cursor.executed)
+
+
+def test_a_failed_branch_skips_the_combine_and_the_tables_are_still_dropped(account, clock):
+    cursor, conn, _fake = account()
+    original = conn.get_query_status
+    conn.get_query_status = lambda query_id: "FAILED_WITH_ERROR" if query_id == "fake-query-2" else original(query_id)
+    messages: list[str] = []
+
+    result = _run(conn, _cells(queries.MONSTER_SPLIT, configs=[queries.GEN1]), clock, fanout=3, echo=messages.append)
+
+    cell = result.cells[0]
+    assert (cell.succeeded, cell.failed, cell.capped) == (2, 2, 0)
+    assert not any("HASH_AGG" in s and not s.startswith("CREATE") for s in cursor.executed)
+    assert cell.answer is None
+    assert any("skipping the last 1 statement(s), which need what failed" in m for m in messages)
+    table = cell.cell.table(OBJECTS.database, RUN_ID)
+    assert f"DROP TABLE IF EXISTS {table}_B03" in cursor.executed
+
+
+def test_the_limit_covers_every_stage(account, clock):
+    cursor, conn, _fake = account()
+    conn.get_query_status = lambda query_id: "RUNNING"
+
+    result = _run(conn, _cells(queries.MONSTER_SPLIT, configs=[queries.GEN1]), clock, fanout=3, max_credits=0.5)
+
+    cell = result.cells[0]
+    assert f"ALTER WAREHOUSE {cell.warehouse} ABORT ALL QUERIES" in cursor.executed
+    assert (cell.succeeded, cell.capped, cell.failed) == (0, 4, 0)
+    assert cell.wall_s <= cell.wall_limit_s
+
+
+def test_a_later_stage_only_gets_what_is_left_of_the_limit(account, clock):
+    cursor, conn, _fake = account()
+
+    result = _run(conn, _cells(queries.MONSTER_SPLIT, configs=[queries.GEN1]), clock, fanout=2)
+
+    timeouts = [
+        int(s.rsplit("=", 1)[1]) for s in cursor.executed if s.startswith("ALTER SESSION SET STATEMENT_TIMEOUT")
+    ]
+    assert len(timeouts) == 2
+    assert timeouts[1] < timeouts[0] == result.cells[0].wall_limit_s - queries.OVERHEAD_SECONDS
+
+
+def test_every_monster_cell_should_return_the_same_answer(account, clock):
+    _cursor, conn, _fake = account()
+    cells = _cells(queries.MONSTER, queries.MONSTER_SPLIT, configs=[queries.GEN1, queries.ADAPTIVE])
+
+    result = _run(conn, cells, clock, fanout=2)
+
+    assert result.mismatched_answers == ()
+
+
+def test_a_monster_cell_with_a_different_answer_is_called_out(account, clock):
+    _cursor, conn, _fake = account(split_answer=(25, 999, 1))
+    messages: list[str] = []
+    cells = _cells(queries.MONSTER, queries.MONSTER_SPLIT, configs=[queries.GEN1, queries.ADAPTIVE])
+
+    result = _run(conn, cells, clock, fanout=2, max_credits=20, echo=messages.append)
+
+    assert len(result.mismatched_answers) == 2
+    assert all(label.startswith("monster-split") for label in result.mismatched_answers)
+    assert any(m.startswith("\nWARNING: the monster cells didn't all return the same answer") for m in messages)
+
+
+def test_a_monster_cell_gets_a_bigger_share_of_the_budget(account, clock):
+    _cursor, conn, _fake = account()
+
+    result = _run(conn, _cells(queries.SINGLE, queries.MONSTER, configs=[queries.GEN1]), clock, fanout=2)
+
+    single, monster_cell = result.cells
+    assert monster_cell.wall_limit_s > single.wall_limit_s
+
+
+def test_a_bad_fanout_is_refused_before_anything_is_created(account, clock):
+    cursor, conn, _fake = account()
+    with pytest.raises(ValueError, match="fanout"):
+        _run(conn, _cells(queries.MONSTER), clock, fanout=1)
+    assert not any(s.startswith("CREATE") for s in cursor.executed)
