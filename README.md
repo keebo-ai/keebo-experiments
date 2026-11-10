@@ -51,6 +51,16 @@ Every experiment is a subcommand of the single `keebo-experiments` CLI.
   the Enterprise edition.
   Run: `poetry run keebo-experiments multi-cluster-billing --help`.
 
+- [**adaptive-compute**](./experiments/adaptive_compute/) — finds where
+  Snowflake's Adaptive warehouses beat Gen1 and Gen2 on speed and on cost, and
+  where they don't. It runs five workload shapes (one query, sequential,
+  concurrent, DML, CTAS) on each size of each configuration, each on a fresh
+  warehouse of its own, reads the bill back from `ACCOUNT_USAGE`, and reports
+  break-even points: how busy a standard warehouse must be to win, and the
+  `AUTO_SUSPEND` above which Adaptive does. It caps each run's credits.
+  Requires the Enterprise edition.
+  Run: `poetry run keebo-experiments adaptive-compute --help`.
+
 ## Repository layout
 
 ```

@@ -125,3 +125,19 @@ def test_is_statement_timeout_checks_snowflakes_error_number():
 
     assert sf.is_statement_timeout(Timeout())
     assert not sf.is_statement_timeout(RuntimeError("boom"))
+
+
+def test_table_exists_matches_the_exact_name(make_cursor):
+    cursor = make_cursor(fetch=[("LINEITEMX",), ("LINEITEM",)], description=[("name",)])
+    assert sf.table_exists(cursor, "db.sch.lineitem") is True
+    assert cursor.executed == ["SHOW TABLES LIKE 'LINEITEM' IN SCHEMA DB.SCH"]
+
+
+def test_table_exists_is_false_when_the_database_is_missing(make_cursor):
+    cursor = make_cursor()
+
+    def execute(sql, *args):
+        raise RuntimeError("Database 'SNOWFLAKE_SAMPLE_DATA' does not exist or not authorized.")
+
+    cursor.execute = execute
+    assert sf.table_exists(cursor, "SNOWFLAKE_SAMPLE_DATA.TPCH_SF10.LINEITEM") is False

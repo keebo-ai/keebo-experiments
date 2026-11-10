@@ -79,6 +79,20 @@ def rows(cur: Any) -> list[dict[str, Any]]:
     return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
 
 
+def table_exists(cur: Any, table: str) -> bool:
+    """Whether ``DB.SCHEMA.NAME`` exists and this role can see it.
+
+    For a database that's missing or not granted (e.g. an absent sample-data
+    share) Snowflake raises rather than returning no rows; that counts as "no".
+    """
+    database, schema, name = table.upper().split(".")
+    try:
+        cur.execute(f"SHOW TABLES LIKE '{name}' IN SCHEMA {database}.{schema}")
+    except Exception:  # "does not exist or not authorized"
+        return False
+    return any(row.get("name") == name for row in rows(cur))
+
+
 def _connector() -> Any:
     """Import the Snowflake connector lazily (heavy optional dependency)."""
     from snowflake import connector  # noqa: PLC0415

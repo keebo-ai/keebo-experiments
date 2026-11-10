@@ -51,6 +51,30 @@ def drop(cur: Any, kind: str, name: str, *, comment: str) -> bool:
     return True
 
 
+def owned(cur: Any, kind: str, prefix: str | None = None, *, comment: str) -> list[str]:
+    """The names of every ``kind`` that carries ``comment``, optionally only those starting with ``prefix``.
+
+    For experiments that create objects by the dozen (one warehouse per test
+    cell, say), so ``cleanup`` can find each one, including any a crashed run
+    left behind. With no ``prefix`` it finds them whatever they're called,
+    since the comment alone marks them. Objects without the comment aren't
+    returned: they belong to someone else.
+    """
+    if kind not in KINDS:
+        raise ValueError(f"kind must be one of {', '.join(KINDS)}, got {kind!r}")
+    if prefix is None:
+        cur.execute(f"SHOW {kind}S")
+        prefix = ""
+    else:
+        prefix = validate_name(prefix, kind.lower())
+        cur.execute(f"SHOW {kind}S LIKE '{prefix}%'")
+    return [
+        str(row["name"])
+        for row in rows(cur)
+        if str(row.get("name", "")).upper().startswith(prefix) and row.get("comment") == comment
+    ]
+
+
 def suspend_quietly(cur: Any, warehouse: str, echo: Callable[[str], None] | None = None) -> None:
     """Suspend ``warehouse``, ignoring errors. The caller must already have claimed it.
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from common import dedicated, warehouses
+from common import compare, dedicated, warehouses
 from common.tables import ReportTable
 from experiments.warehouse_sizing_benchmark.core import infra, queries
 from experiments.warehouse_sizing_benchmark.core.sweep import SizeResult
@@ -107,8 +107,7 @@ def _side_by_side_rows(smaller: SizeResult, larger: SizeResult) -> list[tuple[st
 def _speedup(smaller: SizeResult, larger: SizeResult) -> str:
     if larger.cold_capped or not smaller.cold_s or not larger.cold_s:
         return _MISSING
-    ratio = smaller.cold_s / larger.cold_s
-    text = f"{ratio:.1f}x faster" if ratio >= 1 else f"{1 / ratio:.1f}x slower"
+    text = compare.speed_change(smaller.cold_s, larger.cold_s)
     return f"at least {text}" if smaller.cold_capped else text
 
 
@@ -125,15 +124,7 @@ def _spill_change(smaller: float | None, larger: float | None) -> str:
 
 
 def _cost_change(smaller: float, larger: float) -> str:
-    if not smaller or not larger:
-        return _MISSING
-    ratio = larger / smaller
-    if ratio >= 2:
-        return f"{ratio:.1f}x as much"
-    diff = (ratio - 1) * 100
-    if round(diff) == 0:
-        return "about the same"
-    return f"{abs(diff):.0f}% cheaper" if diff < 0 else f"{diff:.0f}% more"
+    return compare.cost_change(smaller, larger) or _MISSING
 
 
 def summary_lines(results: list[SizeResult]) -> list[str]:
