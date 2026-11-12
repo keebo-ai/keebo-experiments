@@ -1,3 +1,10 @@
+## v0.6.0 (2026-11-12)
+
+### Feat
+
+- **adaptive-compute**: add opt-in monster and monster-split many-CTE workloads (#42)
+- **adaptive-compute**: compare Adaptive, Gen1 and Gen2 warehouses with per-cell bills (#41)
+
 ## v0.5.2 (2026-11-10)
 
 ## v0.5.1 (2026-10-13)
