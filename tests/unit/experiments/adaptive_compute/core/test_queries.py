@@ -27,6 +27,8 @@ def test_all_22_tpch_queries_fill_in_cleanly():
         (queries.CONCURRENT, list(queries.TPCH)),
         (queries.DML, ["delete_month", "insert_month"]),
         (queries.CTAS, ["ctas_narrow", "ctas_wide"]),
+        (queries.MONSTER, ["monster"]),
+        (queries.MONSTER_SPLIT, [f"b{i:02d}" for i in range(1, 17)] + ["combine"]),
     ],
 )
 def test_each_workload_runs_its_statements(workload, names):
@@ -53,6 +55,33 @@ def test_ctas_writes_two_scratch_tables_and_drops_both():
         f"DROP TABLE IF EXISTS {TABLE}_WIDE",
     ]
     assert queries.prepare_statements(queries.CTAS, table=TABLE, base=BASE) == []
+
+
+def test_the_monster_workloads_read_the_chosen_scale_and_fanout():
+    sf100 = "SNOWFLAKE_SAMPLE_DATA.TPCH_SF100"
+    ((_, sql),) = queries.workload_statements(queries.MONSTER, schema=sf100, table=TABLE, base=BASE, fanout=4)
+    assert f"FROM {sf100}.lineitem" in sql
+    assert sql.count(" AS (\n") == 3 * 4 - 1
+
+
+def test_monster_split_runs_in_two_stages_and_drops_every_branch_table():
+    stages = queries.workload_stages(queries.MONSTER_SPLIT, schema=SCHEMA, table=TABLE, base=BASE, fanout=3)
+    assert [[name for name, _ in stage] for stage in stages] == [["b01", "b02", "b03"], ["combine"]]
+    assert all(sql.startswith(f"CREATE TEMPORARY TABLE {TABLE}_B0") for _, sql in stages[0])
+    assert queries.teardown_statements(queries.MONSTER_SPLIT, table=TABLE, fanout=3) == [
+        f"DROP TABLE IF EXISTS {TABLE}_B01",
+        f"DROP TABLE IF EXISTS {TABLE}_B02",
+        f"DROP TABLE IF EXISTS {TABLE}_B03",
+    ]
+    assert queries.prepare_statements(queries.MONSTER_SPLIT, table=TABLE, base=BASE) == []
+    assert queries.teardown_statements(queries.MONSTER, table=TABLE) == []
+
+
+def test_the_concurrent_workload_is_one_stage_and_sequential_ones_have_none():
+    (stage,) = queries.workload_stages(queries.CONCURRENT, schema=SCHEMA, table=TABLE, base=BASE)
+    assert [name for name, _ in stage] == list(queries.TPCH)
+    with pytest.raises(ValueError, match="one statement at a time"):
+        queries.workload_stages(queries.MONSTER, schema=SCHEMA, table=TABLE, base=BASE)
 
 
 def _ddl(config, *, concurrent=False, max_clusters=2):
@@ -113,6 +142,16 @@ def test_report_sql_fills_the_run_tag_and_cell_prefix():
     assert "query_tag LIKE 'adcomp:20261014_143318:%'" in sql
     assert "DATEADD('hour', -6," in sql
     assert "query_type IN ('SELECT', 'INSERT', 'DELETE', 'CREATE_TABLE_AS_SELECT')" in sql
+    for column in (
+        "compilation_time / 1000.0",
+        "execution_time / 1000.0",
+        "queued_provisioning_time / 1000.0",
+        "queued_overload_time / 1000.0",
+        "SUM(q.spilled_local) / POWER(1024, 3)",
+        "SUM(q.spilled_remote) / POWER(1024, 3)",
+        "SUM(q.cloud_services)",
+    ):
+        assert column in sql, column
     metering = queries.report_sql(queries.METERING_SQL, home="my_wh", run_id="20261014_143318", hours=6)
     assert "STARTSWITH(warehouse_name, 'MY_WH_20261014_143318_')" in metering
     with pytest.raises(ValueError, match="hours"):

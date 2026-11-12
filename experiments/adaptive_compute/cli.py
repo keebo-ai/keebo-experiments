@@ -23,7 +23,7 @@ import click
 from common import warehouses
 from common.credentials import connection_option, open_connection
 from common.render import echo_table
-from experiments.adaptive_compute.core import infra, plan, queries
+from experiments.adaptive_compute.core import infra, monster, plan, queries
 from experiments.adaptive_compute.core import report as report_core
 from experiments.adaptive_compute.core import run as run_core
 
@@ -67,6 +67,11 @@ def adaptive_compute() -> None:
     Adaptive wins.
 
     \b
+    Two more workloads are opt-in (--workload monster --workload monster-split):
+    one long statement with dozens of CTEs, most of them independent, and the
+    same logic as dbt-style statements submitted at once.
+
+    \b
     Typical flow:
         keebo-experiments adaptive-compute setup     # home warehouse, database, LINEITEM copy; checks support
         keebo-experiments adaptive-compute run       # every cell (about 45 at the defaults)
@@ -88,9 +93,12 @@ def adaptive_compute() -> None:
 
     WARNING: this uses real compute and costs credits. A default run (SF10,
     X-Small to Medium, 45 cells, about an hour) should cost roughly 2-4 credits;
-    the 60-second minimums alone are about 1.4. run never exceeds --max-credits
-    (10 by default), a worst case that assumes every warehouse runs flat out.
-    setup costs under 0.05 credits at SF10.
+    the 60-second minimums alone are about 1.4. The two monster workloads with
+    --adaptive-ceiling XLARGE (20 cells) are estimated at 1-1.5 credits and
+    20-30 minutes at SF10, and 10-15 credits and 2-3 hours at SF100 (pass
+    --max-credits 25); check either with a pilot cell first. run never exceeds
+    --max-credits (10 by default), a worst case that assumes every warehouse
+    runs flat out. setup costs under 0.05 credits at SF10.
     """
 
 
@@ -126,11 +134,27 @@ def setup(scale: int, warehouse_name: str, database: str, connection_name: str |
     f"{', '.join(queries.DEFAULT_SIZES)}.",
 )
 @click.option(
+    "--adaptive-ceiling",
+    "adaptive_ceilings",
+    multiple=True,
+    type=click.Choice(warehouses.SIZE_KEYWORDS, case_sensitive=False),
+    help="Also run Adaptive alone at this MAX_QUERY_PERFORMANCE_LEVEL (repeatable), for every workload, to sweep "
+    "its ceiling above the standard sizes. XLARGE is Snowflake's default. Each one adds a cell per workload.",
+)
+@click.option(
     "--workload",
     "workload_keys",
     multiple=True,
     type=click.Choice([w.key for w in queries.WORKLOADS], case_sensitive=False),
-    help="Workloads to run (repeatable). Defaults to all five.",
+    help=f"Workloads to run (repeatable). Defaults to {', '.join(w.key for w in queries.DEFAULT_WORKLOADS)}. "
+    "monster and monster-split are opt-in.",
+)
+@click.option(
+    "--fanout",
+    default=queries.DEFAULT_FANOUT,
+    show_default=True,
+    type=click.IntRange(min=monster.MIN_FANOUT, max=monster.MAX_FANOUT),
+    help="Independent branches in the monster workloads' query (about 3 CTEs each). More is more work.",
 )
 @click.option(
     "--replicates",
@@ -141,11 +165,11 @@ def setup(scale: int, warehouse_name: str, database: str, connection_name: str |
 )
 @click.option(
     "--max-clusters",
-    default=queries.DEFAULT_MAX_CLUSTERS,
-    show_default=True,
+    default=None,
     type=click.IntRange(min=1, max=10),
-    help="MAX_CLUSTER_COUNT of the standard warehouses for the concurrent workload. select.dev used 4. "
-    "More than 1 needs the Enterprise edition.",
+    help=f"MAX_CLUSTER_COUNT of the standard warehouses for the workloads that submit statements at once. "
+    f"Defaults to {queries.DEFAULT_MAX_CLUSTERS} for concurrent and {queries.DEFAULT_SPLIT_MAX_CLUSTERS} for "
+    "monster-split; given, it sets both. select.dev used 4. More than 1 needs the Enterprise edition.",
 )
 @click.option(
     "--throughput-multiplier",
@@ -169,9 +193,11 @@ def setup(scale: int, warehouse_name: str, database: str, connection_name: str |
 def run(
     config_keys: tuple[str, ...],
     sizes: tuple[str, ...],
+    adaptive_ceilings: tuple[str, ...],
     workload_keys: tuple[str, ...],
+    fanout: int,
     replicates: int,
-    max_clusters: int,
+    max_clusters: int | None,
     throughput_multiplier: int,
     max_credits: float,
     scale: int,
@@ -183,15 +209,20 @@ def run(
     """Run every cell of the grid, each on a fresh warehouse, and print the runtimes."""
     chosen_configs = {k.lower() for k in config_keys}
     chosen_workloads = {k.lower() for k in workload_keys}
+    clusters = {
+        "max_clusters": max_clusters or queries.DEFAULT_MAX_CLUSTERS,
+        "split_max_clusters": max_clusters or queries.DEFAULT_SPLIT_MAX_CLUSTERS,
+    }
     try:
         cells = plan.build_plan(
             configs=[c for c in queries.CONFIGS if not chosen_configs or c.key in chosen_configs],
             sizes=[s.upper() for s in sizes] or list(queries.DEFAULT_SIZES),
-            workloads=[w for w in queries.WORKLOADS if not chosen_workloads or w.key in chosen_workloads],
+            workloads=[w for w in queries.WORKLOADS if w.key in chosen_workloads] or list(queries.DEFAULT_WORKLOADS),
             replicates=replicates,
+            adaptive_ceilings=[s.upper() for s in adaptive_ceilings],
         )
         summary = plan.summarize(
-            cells, max_credits=max_credits, max_clusters=max_clusters, throughput_multiplier=throughput_multiplier
+            cells, max_credits=max_credits, throughput_multiplier=throughput_multiplier, **clusters
         )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -214,9 +245,10 @@ def run(
                 cells=cells,
                 scale=scale,
                 max_credits=max_credits,
-                max_clusters=max_clusters,
                 throughput_multiplier=throughput_multiplier,
+                fanout=fanout,
                 echo=click.echo,
+                **clusters,
             )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
