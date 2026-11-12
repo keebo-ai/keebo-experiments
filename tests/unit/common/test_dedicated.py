@@ -82,3 +82,22 @@ def test_suspend_quietly_suspends(make_cursor):
     cursor = make_cursor()
     dedicated.suspend_quietly(cursor, "my_wh")
     assert cursor.executed == ["ALTER WAREHOUSE MY_WH SUSPEND"]
+
+
+def test_owned_lists_our_objects_with_the_prefix(make_cursor):
+    rows = [("EXP_WH_1", OURS), ("EXP_WH_2", "production"), ("EXPXWH_3", OURS), ("EXP_WH_4", OURS)]
+    cursor = _cursor(make_cursor, rows)
+
+    assert dedicated.owned(cursor, "WAREHOUSE", "exp_wh_", comment=OURS) == ["EXP_WH_1", "EXP_WH_4"]
+    assert cursor.executed == ["SHOW WAREHOUSES LIKE 'EXP_WH_%'"]
+
+
+def test_owned_refuses_an_unsafe_prefix(make_cursor):
+    with pytest.raises(ValueError, match="single unquoted name"):
+        dedicated.owned(make_cursor(), "WAREHOUSE", "x'; DROP", comment=OURS)
+
+
+def test_owned_without_a_prefix_finds_marked_objects_by_any_name(make_cursor):
+    cursor = _cursor(make_cursor, [("ANY_WH", OURS), ("PROD_WH", "production")])
+    assert dedicated.owned(cursor, "WAREHOUSE", comment=OURS) == ["ANY_WH"]
+    assert cursor.executed == ["SHOW WAREHOUSES"]

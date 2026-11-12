@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from common import dedicated, warehouses
-from common.snowflake import is_statement_timeout, rows
+from common.snowflake import is_statement_timeout, table_exists
 from common.sql import validate_identifier, validate_name
 from experiments.warehouse_sizing_benchmark.core import queries
 
@@ -165,20 +165,6 @@ def _source_table(cur: Any, objects: BenchmarkObjects, table: str | None) -> str
             f"{objects.generated_table} doesn't exist (setup didn't finish). {_NOT_SET_UP}"
         )
     return source
-
-
-def table_exists(cur: Any, table: str) -> bool:
-    """Whether ``DB.SCHEMA.NAME`` exists and this role can see it.
-
-    For a database that's missing or not granted (e.g. an absent sample-data
-    share) Snowflake raises rather than returning no rows; that counts as "no".
-    """
-    database, schema, name = table.upper().split(".")
-    try:
-        cur.execute(f"SHOW TABLES LIKE '{name}' IN SCHEMA {database}.{schema}")
-    except Exception:  # "does not exist or not authorized"
-        return False
-    return any(row.get("name") == name for row in rows(cur))
 
 
 def cleanup(conn: Any, objects: BenchmarkObjects, *, echo: Echo = _silent) -> None:
