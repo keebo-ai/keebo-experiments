@@ -128,6 +128,7 @@ def run_grid(
         max_clusters=max_clusters,
         throughput_multiplier=throughput_multiplier,
         split_max_clusters=split_max_clusters,
+        fanout=fanout,
     )
     monster.build_dag(queries.sample_schema(scale), fanout=fanout)  # validates the fanout
     schema = queries.sample_schema(scale)
@@ -157,8 +158,8 @@ def run_grid(
                     budget=max_credits - spent,
                     weight_left=plan.weight_of(cells[index:]),
                     max_clusters=max_clusters,
-                    throughput_multiplier=throughput_multiplier,
                     split_max_clusters=split_max_clusters,
+                    fanout=fanout,
                 )
                 result = _run_cell(
                     conn,
@@ -318,8 +319,8 @@ def _run_cell(
             cell,
             up_s,
             max_clusters=max_clusters,
-            throughput_multiplier=throughput_multiplier,
             split_max_clusters=split_max_clusters,
+            fanout=fanout,
         ),
         answer=outcome.answer,
     )

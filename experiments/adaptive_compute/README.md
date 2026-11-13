@@ -99,37 +99,48 @@ This runs real queries on your account and costs credits.
   From the billing rules we expect the whole run to land around **2-4
   credits**, but treat that as an estimate until you've run it on your own
   account. `run` asks before it starts.
-- **`run` never spends more than `--max-credits`** (10 by default). Before each
+- **`run` never spends more than `--max-credits`** (100 by default). Before each
   cell, the budget left is split across the cells still to go, and the cell's
   share at its worst-case rate becomes a wall-clock limit. No statement runs
   past it, and a concurrent burst is cancelled when it hits. The worst case
   assumes every warehouse runs flat out on every cluster it's allowed, so it's
   a ceiling, not a forecast. A cell that hits its limit shows `+` (a lower
-  bound). What earlier cells didn't use goes to later ones.
-- **Adaptive has no published rate**, so the cap assumes it bills no faster
-  than a Gen2 warehouse at its performance level, times its throughput
-  multiplier for the concurrent workload. Step 3 of the report shows the rate
-  it actually billed at, so you can check that assumption.
+  bound). What earlier cells didn't use goes to later ones. The default of
+  100 is what the default grid needs for its tightest cell to get 60 seconds
+  at its worst-case rate. Expect to spend a small fraction of it.
+- **Adaptive has no published rate**, so the cap bounds it from bills we've
+  measured. A lone statement gets twice the rate of a Gen2 warehouse at its
+  performance level, since one billed up to 1.65 times that. Statements
+  submitted at once get the Gen2 rate per statement. They billed well past the
+  Gen2 rate times `QUERY_THROUGHPUT_MULTIPLIER`, so the multiplier doesn't
+  bound the bill. A short burst can bill about one 60-second floor (at 1
+  credit/hour) per statement, so the cap counts at least that. These bounds
+  make Adaptive cells with statements at once the costliest in the worst case,
+  and they set how high `--max-credits` must go. Step 3 of the report shows
+  the rate Adaptive actually billed at, so you can check the bounds.
 - **`setup`** costs under 0.05 credits at SF10. It copies `LINEITEM` once, sorted
   by ship date, for the DML workload (about 2 GB of storage at SF10, until
   `cleanup`). It also creates and drops a Gen2 and an Adaptive warehouse to
   check your account has them, which is free.
 - **The monster workloads** (`--workload monster --workload monster-split
-  --adaptive-ceiling XLARGE`, 20 cells) are an estimate we haven't checked on
-  a real account yet: about **1-1.5 credits and 20-30 minutes at SF10**. The
-  60-second minimums alone are 0.55. At SF10 most of these cells finish in
-  about a minute, so the minimum still counts for a lot. Use **SF100** for
-  anything you publish. We estimate **10-15 credits and 2-3 hours** there, with
-  `--max-credits 25`. The cap gives each monster cell three times the budget
-  share of a select.dev cell, and up to an hour of wall time. Even at SF10,
-  this grid needs `--max-credits 15` at least (we suggest 20), because an
-  Adaptive X-Large cell has a high worst-case rate. Check the estimate on your account with one pilot cell
-  first, for example
+  --adaptive-ceiling XLARGE`, 20 cells) cost about **3 credits and 40
+  minutes at SF100** on one account, where Adaptive billed about two thirds of
+  it. Use SF100 for anything you publish: at SF10 most cells finish in about a
+  minute, so the 60-second minimum counts for a lot. The cap gives each
+  monster cell three times the budget share of a select.dev cell, and up to an
+  hour of wall time. This grid needs `--max-credits 120` at least, at any
+  scale, because Adaptive running 16 branches at once on an X-Large ceiling
+  has a very high worst-case rate. Check the cost on your account with one
+  pilot cell first, for example
   `run --workload monster --size small --config gen2 --max-credits 1`.
 - **`report`** runs a handful of `ACCOUNT_USAGE` queries on an X-Small: about 0.02 credits.
-- **Bigger runs:** `--scale 100` is about 10x the work and the cost. Pass a
-  matching `--max-credits` (try 60). `--replicates 3` triples the run.
-  `--max-clusters 4` (select.dev's setting) needs `--max-credits 15` or so.
+- **Bigger runs:** `--scale 100` is about 10x the work and the cost, but the
+  same `--max-credits` covers it, since the cap follows rates, not scale.
+  `--replicates 3` triples the run and the `--max-credits` it needs. `--size`
+  up to `xlarge` raises the worst case sharply. Adaptive with statements at
+  once gets the most expensive, so split a big grid into runs (for example
+  `--config adaptive --workload concurrent --workload monster-split` on its
+  own) and give each one the cap `run` asks for.
 
 `setup` creates a warehouse, `ADAPTIVE_COMPUTE_WH`, and a transient database,
 `ADAPTIVE_COMPUTE_DB`. Each cell's warehouse is named
