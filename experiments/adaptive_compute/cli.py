@@ -94,11 +94,11 @@ def adaptive_compute() -> None:
     WARNING: this uses real compute and costs credits. A default run (SF10,
     X-Small to Medium, 45 cells, about an hour) should cost roughly 2-4 credits;
     the 60-second minimums alone are about 1.4. The two monster workloads with
-    --adaptive-ceiling XLARGE (20 cells) are estimated at 1-1.5 credits and
-    20-30 minutes at SF10, and 10-15 credits and 2-3 hours at SF100 (pass
-    --max-credits 25); check either with a pilot cell first. run never exceeds
-    --max-credits (10 by default), a worst case that assumes every warehouse
-    runs flat out. setup costs under 0.05 credits at SF10.
+    --adaptive-ceiling XLARGE (20 cells) cost about 3 credits and 40 minutes
+    at SF100 on one account (pass --max-credits 120); check with a pilot cell
+    first. run never exceeds --max-credits (100 by default), a worst case that
+    assumes every warehouse runs flat out, so expect to spend a small fraction
+    of it. setup costs under 0.05 credits at SF10.
     """
 
 
@@ -182,7 +182,7 @@ def setup(scale: int, warehouse_name: str, database: str, connection_name: str |
     "--max-credits",
     default=queries.DEFAULT_MAX_CREDITS,
     show_default=True,
-    type=click.FloatRange(min=0.5, max=100),
+    type=click.FloatRange(min=0.5, max=1000),
     help="Never spend more than this. Each cell's wall-clock limit comes from it.",
 )
 @_SCALE_OPTION
@@ -222,7 +222,7 @@ def run(
             adaptive_ceilings=[s.upper() for s in adaptive_ceilings],
         )
         summary = plan.summarize(
-            cells, max_credits=max_credits, throughput_multiplier=throughput_multiplier, **clusters
+            cells, max_credits=max_credits, throughput_multiplier=throughput_multiplier, fanout=fanout, **clusters
         )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -230,8 +230,9 @@ def run(
     if not yes:
         click.confirm(
             f"This creates {summary.cells} warehouses one at a time ({summary.standard_cells} standard, "
-            f"{summary.adaptive_cells} Adaptive) and runs real queries on TPCH_SF{scale}. The standard warehouses' "
-            f"60-second minimums alone come to {summary.minimum_credits:.2f} credits, and the run won't spend more "
+            f"{summary.adaptive_cells} Adaptive) and runs real queries on TPCH_SF{scale}. Their minimums alone "
+            f"(60 seconds for a standard warehouse, Adaptive's measured floor) come to "
+            f"{summary.minimum_credits:.2f} credits, and the run won't spend more "
             f"than {max_credits:g}. Continue?",
             abort=True,
         )

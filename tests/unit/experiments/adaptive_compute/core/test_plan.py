@@ -81,32 +81,49 @@ def test_bad_grids_are_rejected():
 
 
 def test_worst_case_rate():
-    def rate(workload, config, size="SMALL", max_clusters=2, multiplier=2):
+    def rate(workload, config, size="SMALL", max_clusters=2, fanout=queries.DEFAULT_FANOUT):
         cell = plan.Cell(workload, size, config)
-        return plan.worst_case_rate(cell, max_clusters=max_clusters, throughput_multiplier=multiplier)
+        return plan.worst_case_rate(cell, max_clusters=max_clusters, fanout=fanout)
 
     assert rate(queries.SEQUENTIAL, queries.GEN1) == 2
     assert rate(queries.SEQUENTIAL, queries.GEN2) == pytest.approx(2.7)
     assert rate(queries.CONCURRENT, queries.GEN1, max_clusters=4) == 8
-    # Adaptive is assumed to bill no faster than Gen2 at its level, times its burst.
-    assert rate(queries.SEQUENTIAL, queries.ADAPTIVE) == pytest.approx(2.7)
-    assert rate(queries.CONCURRENT, queries.ADAPTIVE, multiplier=2) == pytest.approx(5.4)
-    assert rate(queries.CONCURRENT, queries.ADAPTIVE, multiplier=0) == pytest.approx(2.7 * 8)
+    # Adaptive: twice the Gen2 rate at its level for a lone statement...
+    assert rate(queries.SEQUENTIAL, queries.ADAPTIVE) == pytest.approx(2.7 * 2)
+    assert rate(queries.MONSTER, queries.ADAPTIVE, size="MEDIUM") == pytest.approx(5.4 * 2)
+    # ...and the Gen2 rate per statement submitted at once, whatever the throughput multiplier.
+    assert rate(queries.CONCURRENT, queries.ADAPTIVE) == pytest.approx(2.7 * len(queries.TPCH))
+    assert rate(queries.MONSTER_SPLIT, queries.ADAPTIVE, fanout=4) == pytest.approx(2.7 * 4)
 
 
-def test_standard_cells_carry_the_60_second_minimum_and_adaptive_doesnt():
+def test_statements_at_once():
+    def at_once(workload, fanout=queries.DEFAULT_FANOUT):
+        return plan.statements_at_once(plan.Cell(workload, "SMALL", queries.ADAPTIVE), fanout=fanout)
+
+    assert at_once(queries.SINGLE) == at_once(queries.SEQUENTIAL) == at_once(queries.MONSTER) == 1
+    assert at_once(queries.CONCURRENT) == 22
+    assert at_once(queries.MONSTER_SPLIT) == queries.DEFAULT_FANOUT
+    assert at_once(queries.MONSTER_SPLIT, fanout=8) == 8
+
+
+def test_every_cell_carries_a_minimum():
     gen1 = plan.Cell(queries.SINGLE, "XSMALL", queries.GEN1)
     adaptive = plan.Cell(queries.SINGLE, "XSMALL", queries.ADAPTIVE)
+    burst = plan.Cell(queries.CONCURRENT, "XSMALL", queries.ADAPTIVE)
+    # A standard warehouse's 60-second minimum; Adaptive's measured floor.
     assert plan.minimum_credits(gen1) == pytest.approx(1 / 60)
-    assert plan.minimum_credits(adaptive) == 0
-    kw = {"max_clusters": 1, "throughput_multiplier": 2}
+    assert plan.minimum_credits(adaptive) == plan.minimum_credits(burst) == plan.ADAPTIVE_MINIMUM_CREDITS
+    kw = {"max_clusters": 1}
     assert plan.worst_case_credits(gen1, 10, **kw) == pytest.approx(1 / 60)
-    assert plan.worst_case_credits(adaptive, 10, **kw) == pytest.approx(1.35 * 10 / 3600)
+    assert plan.worst_case_credits(adaptive, 10, **kw) == pytest.approx(plan.ADAPTIVE_MINIMUM_CREDITS)
+    assert plan.worst_case_credits(adaptive, 100, **kw) == pytest.approx(1.35 * 2 * 100 / 3600)
+    # A short burst can bill a floor per statement, more than its rate over a few seconds.
+    assert plan.worst_case_credits(burst, 2, **kw) == pytest.approx(22 * plan.ADAPTIVE_MINIMUM_CREDITS)
 
 
 def test_wall_limit_splits_the_budget_evenly_and_clamps():
     cell = plan.Cell(queries.SEQUENTIAL, "XSMALL", queries.GEN1)
-    kw = {"max_clusters": 2, "throughput_multiplier": 2}
+    kw = {"max_clusters": 2}
     assert plan.wall_limit(cell, budget=1.0, weight_left=10, **kw) == 360
     assert plan.wall_limit(cell, budget=100, weight_left=1, **kw) == queries.MAX_WALL_SECONDS
     with pytest.raises(ValueError, match="Raise --max-credits"):
@@ -115,8 +132,8 @@ def test_wall_limit_splits_the_budget_evenly_and_clamps():
 
 def test_without_a_monster_workload_every_limit_is_the_even_split_it_always_was():
     cells = _grid(replicates=2)
-    kw = {"max_clusters": 2, "throughput_multiplier": 2}
-    budget = 25.0
+    kw = {"max_clusters": 2}
+    budget = 250.0
     for index, cell in enumerate(cells):
         cells_left = len(cells) - index
         even = min(int(budget / cells_left * 3600 / plan.worst_case_rate(cell, **kw)), queries.MAX_WALL_SECONDS)
@@ -125,7 +142,7 @@ def test_without_a_monster_workload_every_limit_is_the_even_split_it_always_was(
 
 def test_a_monster_cell_gets_its_weight_in_budget_and_a_longer_ceiling():
     cells = _grid(workloads=[queries.SINGLE, queries.MONSTER], sizes=["LARGE"], configs=[queries.GEN1])
-    kw = {"max_clusters": 2, "throughput_multiplier": 2}
+    kw = {"max_clusters": 2}
     total = plan.weight_of(cells)
     assert total == 1 + queries.MONSTER.weight
     single, monster = (plan.wall_limit(c, budget=1.0, weight_left=total, **kw) for c in cells)
@@ -140,17 +157,17 @@ def test_monster_split_is_single_cluster_unless_asked():
     assert plan.clusters(cell, max_clusters=4, split_max_clusters=3) == 3
     assert plan.clusters(plan.Cell(queries.CONCURRENT, "SMALL", queries.GEN1), max_clusters=4) == 4
     assert plan.clusters(plan.Cell(queries.MONSTER, "SMALL", queries.GEN1), max_clusters=4) == 1
-    assert plan.worst_case_rate(cell, max_clusters=4, throughput_multiplier=2) == 2
-    # Adaptive bursts on any workload that submits statements at once.
+    assert plan.worst_case_rate(cell, max_clusters=4) == 2
+    # Adaptive bursts on any workload that submits statements at once: one Gen2 rate per branch.
     adaptive = plan.Cell(queries.MONSTER_SPLIT, "SMALL", queries.ADAPTIVE)
-    assert plan.worst_case_rate(adaptive, max_clusters=1, throughput_multiplier=2) == pytest.approx(5.4)
+    assert plan.worst_case_rate(adaptive, max_clusters=1) == pytest.approx(2.7 * queries.DEFAULT_FANOUT)
 
 
 def test_summary_of_the_default_grid():
-    summary = plan.summarize(_grid(), max_credits=10, max_clusters=2, throughput_multiplier=2)
+    summary = plan.summarize(_grid(), max_credits=queries.DEFAULT_MAX_CREDITS, max_clusters=2, throughput_multiplier=2)
     assert (summary.cells, summary.standard_cells, summary.adaptive_cells) == (45, 30, 15)
-    # 5 workloads x (1+2+4 Gen1 + 1.35+2.7+5.4 Gen2) credits/hr x 60 s
-    assert summary.minimum_credits == pytest.approx(5 * 16.45 / 60, abs=0.001)
+    # 5 workloads x (1+2+4 Gen1 + 1.35+2.7+5.4 Gen2) credits/hr x 60 s, plus Adaptive's floor per cell.
+    assert summary.minimum_credits == pytest.approx(5 * 16.45 / 60 + 15 * plan.ADAPTIVE_MINIMUM_CREDITS, abs=0.001)
     assert summary.tightest_wall_s >= queries.MIN_WALL_SECONDS
 
 

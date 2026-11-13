@@ -552,9 +552,12 @@ def create_cell_warehouse_sql(
 IDLE_TIMEOUT_SECONDS = 1800
 
 # --------------------------------------------------------------------------- #
-# The cost cap (see plan.wall_limits)
+# The cost cap (see plan.wall_limit)
 # --------------------------------------------------------------------------- #
-DEFAULT_MAX_CREDITS = 10.0
+# A worst case, not a forecast: enough for the default grid's tightest cell
+# (Adaptive running the concurrent workload at Medium) to get MIN_WALL_SECONDS
+# at its worst-case rate. A default run bills a few credits.
+DEFAULT_MAX_CREDITS = 100.0
 # Every cell gets at least this long. Less would cancel queries on a warehouse
 # that bills its first 60 seconds regardless.
 MIN_WALL_SECONDS = 60

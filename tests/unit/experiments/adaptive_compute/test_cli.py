@@ -102,7 +102,7 @@ def test_run_subsets_the_grid(runner, account):
 def test_run_turns_a_cap_that_is_too_small_into_a_clean_error(runner, account):
     _cursor, conn, _fake = account()
     _stub_connection(conn)
-    result = _invoke(runner, "run", "--max-clusters", "4", "--yes")
+    result = _invoke(runner, "run", "--max-credits", "10", "--yes")
     assert result.exit_code == 1
     assert "Raise --max-credits" in result.output
     assert "Traceback" not in result.output

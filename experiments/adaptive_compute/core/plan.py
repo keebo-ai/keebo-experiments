@@ -107,33 +107,59 @@ def clusters(cell: Cell, *, max_clusters: int, split_max_clusters: int = queries
     return split_max_clusters if cell.workload.staged else max_clusters
 
 
+# Snowflake publishes no rate for Adaptive, so the cap bounds it from measured
+# bills (SF10 and SF100 runs, 2026). One statement billed up to 1.65x the Gen2
+# rate of its MAX_QUERY_PERFORMANCE_LEVEL, so the cap allows
+# ADAPTIVE_SINGLE_HEADROOM times that rate. Statements submitted at once billed
+# well past that rate times QUERY_THROUGHPUT_MULTIPLIER (up to 6x it), so the
+# multiplier doesn't bound the bill. They stayed under the Gen2 rate times the
+# number of statements submitted at once, which is what the cap allows.
+ADAPTIVE_SINGLE_HEADROOM = 2.0
+# An Adaptive warehouse that runs anything bills at least about 60 seconds at
+# 1 credit/hour: short SF10 cells billed exactly this whatever they did. A
+# short burst of statements submitted at once billed up to one of these per
+# statement. Snowflake doesn't document either.
+ADAPTIVE_MINIMUM_CREDITS = 1 / 60
+
+
+def statements_at_once(cell: Cell, *, fanout: int = queries.DEFAULT_FANOUT) -> int:
+    """The most statements the cell submits together: 22 TPC-H queries, monster-split's branches, or 1."""
+    if not cell.workload.concurrent:
+        return 1
+    return fanout if cell.workload.staged else len(queries.TPCH)
+
+
 def worst_case_rate(
     cell: Cell,
     *,
     max_clusters: int,
-    throughput_multiplier: int,
     split_max_clusters: int = queries.DEFAULT_SPLIT_MAX_CLUSTERS,
+    fanout: int = queries.DEFAULT_FANOUT,
 ) -> float:
     """The most credits per hour the cell's warehouse could burn.
 
     A standard warehouse bills its size's rate per running cluster (see
-    :func:`clusters`). Snowflake doesn't publish a rate for Adaptive, so the
-    cap *assumes* it bills no faster than a Gen2 warehouse at its performance
-    level, times the throughput multiplier for a workload that submits
-    statements at once (8 when the multiplier is 0, meaning unlimited). The
-    report checks that assumption against the real bill.
+    :func:`clusters`). For Adaptive, the cap allows a Gen2 warehouse's rate at
+    its performance level per statement submitted at once, or
+    :data:`ADAPTIVE_SINGLE_HEADROOM` times that rate for a lone statement.
+    That's a bound from measured bills, not a published rate. The report's
+    Step 3 shows the rate it actually billed at.
     """
     if cell.config.adaptive:
-        burst = (throughput_multiplier or 8) if cell.workload.concurrent else 1
-        return warehouses.credits_per_hour(cell.size, "2") * burst
+        at_once = statements_at_once(cell, fanout=fanout)
+        return warehouses.credits_per_hour(cell.size, "2") * (at_once if at_once > 1 else ADAPTIVE_SINGLE_HEADROOM)
     count = clusters(cell, max_clusters=max_clusters, split_max_clusters=split_max_clusters)
     return warehouses.credits_per_hour(cell.size, cell.config.generation or "1") * count
 
 
 def minimum_credits(cell: Cell) -> float:
-    """What the cell costs even if it does nothing: a standard warehouse's 60-second minimum."""
+    """What the cell costs even if it does nothing.
+
+    A standard warehouse's 60-second minimum, or Adaptive's measured floor
+    (:data:`ADAPTIVE_MINIMUM_CREDITS`).
+    """
     if cell.config.adaptive:
-        return 0.0
+        return ADAPTIVE_MINIMUM_CREDITS
     rate = warehouses.credits_per_hour(cell.size, cell.config.generation or "1")
     return rate * warehouses.BILLING_MINIMUM_SECONDS / 3600
 
@@ -143,18 +169,19 @@ def worst_case_credits(
     wall_s: float,
     *,
     max_clusters: int,
-    throughput_multiplier: int,
     split_max_clusters: int = queries.DEFAULT_SPLIT_MAX_CLUSTERS,
+    fanout: int = queries.DEFAULT_FANOUT,
 ) -> float:
-    """The most the cell can cost if its warehouse runs flat out for ``wall_s`` (60 seconds at least)."""
-    rate = worst_case_rate(
-        cell,
-        max_clusters=max_clusters,
-        throughput_multiplier=throughput_multiplier,
-        split_max_clusters=split_max_clusters,
-    )
-    billed_s = wall_s if cell.config.adaptive else max(wall_s, warehouses.BILLING_MINIMUM_SECONDS)
-    return rate * billed_s / 3600
+    """The most the cell can cost if its warehouse runs flat out for ``wall_s``.
+
+    Never less than its minimum, and for Adaptive never less than one floor per
+    statement submitted at once, which is what a short burst has billed.
+    """
+    rate = worst_case_rate(cell, max_clusters=max_clusters, split_max_clusters=split_max_clusters, fanout=fanout)
+    if cell.config.adaptive:
+        floor = ADAPTIVE_MINIMUM_CREDITS * statements_at_once(cell, fanout=fanout)
+        return max(rate * wall_s / 3600, floor)
+    return rate * max(wall_s, warehouses.BILLING_MINIMUM_SECONDS) / 3600
 
 
 def weight_of(cells: Sequence[Cell]) -> float:
@@ -173,8 +200,8 @@ def wall_limit(
     budget: float,
     weight_left: float,
     max_clusters: int,
-    throughput_multiplier: int,
     split_max_clusters: int = queries.DEFAULT_SPLIT_MAX_CLUSTERS,
+    fanout: int = queries.DEFAULT_FANOUT,
 ) -> int:
     """How long ``cell`` may run so that every cell still to go, this one included, fits in ``budget``.
 
@@ -191,12 +218,7 @@ def wall_limit(
     Raises ``ValueError`` if the share can't buy :data:`queries.MIN_WALL_SECONDS`.
     """
     share = budget * cell.workload.weight / max(weight_left, cell.workload.weight)
-    rate = worst_case_rate(
-        cell,
-        max_clusters=max_clusters,
-        throughput_multiplier=throughput_multiplier,
-        split_max_clusters=split_max_clusters,
-    )
+    rate = worst_case_rate(cell, max_clusters=max_clusters, split_max_clusters=split_max_clusters, fanout=fanout)
     wall = int(share * 3600 / rate)
     if wall < queries.MIN_WALL_SECONDS:
         raise ValueError(
@@ -214,7 +236,7 @@ class PlanSummary:
     cells: int
     standard_cells: int
     adaptive_cells: int
-    minimum_credits: float  # the standard warehouses' 60-second minimums alone
+    minimum_credits: float  # standard 60-second minimums plus Adaptive's measured floors
     max_credits: float
     tightest_wall_s: int
     tightest_label: str
@@ -227,6 +249,7 @@ def summarize(
     max_clusters: int,
     throughput_multiplier: int,
     split_max_clusters: int = queries.DEFAULT_SPLIT_MAX_CLUSTERS,
+    fanout: int = queries.DEFAULT_FANOUT,
 ) -> PlanSummary:
     """Check the settings and that the cap covers every cell, and say what the run will cost at least and at most."""
     if max_clusters < 1 or split_max_clusters < 1:
@@ -242,8 +265,8 @@ def summarize(
             budget=max_credits,
             weight_left=total,
             max_clusters=max_clusters,
-            throughput_multiplier=throughput_multiplier,
             split_max_clusters=split_max_clusters,
+            fanout=fanout,
         )
         for cell in cells
     }
